@@ -13,7 +13,7 @@ dependencies:
   # HTTP requests (Binance API + Telegram)
   http: ^1.2.0
 
-  # Background service (runs even when app is closed)
+  # Background service (runs even when app is closed)b
   flutter_background_service: ^5.0.5
   flutter_background_service_android: ^6.2.2
 
