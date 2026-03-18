@@ -35,8 +35,8 @@ dev_dependencies:
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: true
-  image_path: "assets/goodLuck.png"
-  min_sdk_android: 21 # android min sdk min:16, default 21
+  image_path: "assets/my_icon.png"   # ← change here
+  min_sdk_android: 21
 
 flutter:
   uses-material-design: true
