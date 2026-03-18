@@ -2,7 +2,7 @@
 // Runs the bot logic in the background even when app is closed.
 
 import 'dart:async';
-import 'package:flutter/widgets.dart'; // ← FIX 1: needed for DartPluginRegistrant
+import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -11,9 +11,10 @@ import 'binance_service.dart';
 import 'pivot_service.dart';
 import 'telegram_service.dart';
 
-// ─── FIX 2: Top-level timer so it can be cancelled/restarted ─
+// ─── Top-level state (isolate-local) ─────────────────────
 Timer? _checkTimer;
-bool _isBusy = false; // guard against overlapping runs
+bool _isBusy = false;
+bool _shouldStop = false; // FIX: reliable stop flag instead of isRunning() check
 
 // ─── INIT BACKGROUND SERVICE ─────────────────────────────
 Future<void> initBackgroundService() async {
@@ -43,8 +44,6 @@ Future<void> initBackgroundService() async {
       initialNotificationTitle: 'HH/LL Bot',
       initialNotificationContent: 'Bot is running...',
       foregroundServiceNotificationId: 888,
-      // ─── FIX 4: declare the foreground service type ───
-      foregroundServiceTypes: [AndroidForegroundType.dataSync],
     ),
     iosConfiguration: IosConfiguration(
       autoStart: false,
@@ -57,7 +56,7 @@ Future<void> initBackgroundService() async {
 // ─── iOS BACKGROUND HANDLER ──────────────────────────────
 @pragma('vm:entry-point')
 Future<bool> onIosBackground(ServiceInstance service) async {
-  // ─── FIX 1: required in every isolate entry point ────
+  // FIX 1: required so Flutter plugins work in this isolate
   WidgetsFlutterBinding.ensureInitialized();
   return true;
 }
@@ -65,27 +64,29 @@ Future<bool> onIosBackground(ServiceInstance service) async {
 // ─── MAIN BACKGROUND LOOP ────────────────────────────────
 @pragma('vm:entry-point')
 void onBackgroundStart(ServiceInstance service) async {
-  // ─── FIX 1: CRITICAL — without this, ALL Flutter plugins
-  //     (http, SharedPreferences, etc.) silently do nothing
-  //     in the background isolate. This is the #1 cause of
-  //     the bot "doing nothing" after start. ───────────────
+  // FIX 1: CRITICAL — registers Flutter plugins (http, SharedPreferences, etc.)
+  // in the background isolate. Without this every network/storage call silently
+  // does nothing, which is why the bot appears to do nothing on a timer.
   WidgetsFlutterBinding.ensureInitialized();
-  ;
+
+  // Reset state from any previous run
+  _shouldStop = false;
+  _isBusy = false;
+  _checkTimer?.cancel();
+  _checkTimer = null;
 
   print('🚀 Background service started');
 
-  // Load saved config from disk into this isolate's Config.*
   await ConfigService.load();
-  print(
-      '✅ Config loaded: ${Config.symbols} | ${Config.timeframes} | every ${Config.checkEveryMinutes}m');
+  print('✅ Config loaded: ${Config.symbols} | ${Config.timeframes} | every ${Config.checkEveryMinutes}m');
 
   // ─── Stop command ─────────────────────────────────────
-  // FIX 3: also cancel the timer so it stops firing
   service.on('stop').listen((event) {
+    print('🛑 Stop command received');
+    _shouldStop = true;        // FIX 2: set flag so timer stops cleanly
     _checkTimer?.cancel();
     _checkTimer = null;
     service.stopSelf();
-    print('🛑 Background service stopped');
   });
 
   // ─── Live config update from main isolate ─────────────
@@ -112,47 +113,45 @@ void onBackgroundStart(ServiceInstance service) async {
     }
     if (data['checkEveryMinutes'] != null) {
       final newInterval = data['checkEveryMinutes'] as int;
-      final intervalChanged = newInterval != Config.checkEveryMinutes;
+      final changed = newInterval != Config.checkEveryMinutes;
       Config.checkEveryMinutes = newInterval;
 
-      // ─── FIX 2: restart the timer when the interval changes ──
-      if (intervalChanged) {
-        print(
-            '⏱ Interval changed to ${Config.checkEveryMinutes}m — restarting timer');
+      if (changed) {
+        print('⏱ Interval changed to ${Config.checkEveryMinutes}m — restarting timer');
         _restartTimer(service);
       }
     }
 
-    print('🔄 Config updated live: symbols=${Config.symbols}');
+    print('🔄 Config updated: symbols=${Config.symbols}, interval=${Config.checkEveryMinutes}m');
   });
 
   // Run one check immediately on start
   await _runAllChecks(service);
 
-  // ─── FIX 2: use a restartable timer instead of a
-  //     one-shot Timer.periodic that never updates ─────────
+  // Start the repeating timer
   _restartTimer(service);
 }
 
-// ─── FIX 2: Cancels any existing timer and starts a fresh one ─
+// ─── Start/restart the periodic timer ────────────────────
 void _restartTimer(ServiceInstance service) {
   _checkTimer?.cancel();
   _checkTimer = Timer.periodic(
     Duration(minutes: Config.checkEveryMinutes),
     (timer) async {
-      // Guard: skip if a previous run is still in progress
+      // FIX 2: use local flag — calling FlutterBackgroundService().isRunning()
+      // from inside the background isolate is unreliable and was causing the
+      // timer to cancel itself after the first tick.
+      if (_shouldStop) {
+        timer.cancel();
+        return;
+      }
+
       if (_isBusy) {
         print('⏳ Previous check still running — skipping tick');
         return;
       }
 
-      final isRunning = await FlutterBackgroundService().isRunning();
-      if (!isRunning) {
-        timer.cancel();
-        return;
-      }
-
-      // Reload from disk each tick as a fallback for missed IPC updates
+      // Reload config from disk each tick as a fallback
       await ConfigService.load();
       await _runAllChecks(service);
     },
@@ -167,22 +166,33 @@ Future<void> _runAllChecks(ServiceInstance service) async {
 
   try {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.reload(); // flush cache before reading dedup keys
+    await prefs.reload();
     final now = DateTime.now();
 
-    print('🔍 Checking ${Config.symbols} on ${Config.timeframes} — '
-        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}');
+    final timeStr =
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
 
-    service.invoke('update', {
-      'lastCheck':
-          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}',
-    });
+    print('🔍 Checking ${Config.symbols} on ${Config.timeframes} at $timeStr');
+
+    // Update notification text so user can see it's alive
+    if (service is AndroidServiceInstance) {
+      service.setForegroundNotificationInfo(
+        title: 'HH/LL Bot — Last check: $timeStr',
+        content:
+            '${Config.symbols.length} pairs · ${Config.timeframes.join(', ')}',
+      );
+    }
+
+    service.invoke('update', {'lastCheck': timeStr});
 
     for (final symbol in Config.symbols) {
       for (final timeframe in Config.timeframes) {
+        if (_shouldStop) return; // abort early if stopped
         await _checkTimeframe(symbol, timeframe, prefs, service);
       }
     }
+  } catch (e) {
+    print('❌ Error in _runAllChecks: $e');
   } finally {
     _isBusy = false;
   }
@@ -199,33 +209,33 @@ Future<void> _checkTimeframe(
     final candles = await BinanceService.fetchCandles(symbol, timeframe);
     if (candles.length < 2) return;
 
-    final result = PivotService.getHHLL(candles);
+    final result     = PivotService.getHHLL(candles);
     final lastClosed = candles[candles.length - 2];
     final liveCandle = candles[candles.length - 1];
 
     // ─── HH ─────────────────────────────────────────────
     if (result.hh != null) {
-      final key = 'HH_${symbol}_${timeframe}_${result.hh!.toStringAsFixed(5)}';
+      final key            = 'HH_${symbol}_${timeframe}_${result.hh!.toStringAsFixed(5)}';
       final alreadyAlerted = prefs.getBool(key) ?? false;
-      final isHit = PivotService.isHit(lastClosed, result.hh!, true) ||
-          PivotService.isHit(liveCandle, result.hh!, true);
+      final isHit          = PivotService.isHit(lastClosed, result.hh!, true) ||
+                             PivotService.isHit(liveCandle,  result.hh!, true);
 
       if (!alreadyAlerted && isHit) {
         final ok = await TelegramService.sendAlert(
-          levelType: 'HH',
-          levelPrice: result.hh!,
-          timeframe: timeframe,
+          levelType:    'HH',
+          levelPrice:   result.hh!,
+          timeframe:    timeframe,
           currentPrice: liveCandle.close,
-          symbol: symbol,
+          symbol:       symbol,
         );
         if (ok) {
           await prefs.setBool(key, true);
           service.invoke('alert', {
-            'symbol': symbol,
-            'type': 'HH',
-            'price': result.hh!,
+            'symbol':    symbol,
+            'type':      'HH',
+            'price':     result.hh!,
             'timeframe': timeframe,
-            'time': DateTime.now().toIso8601String(),
+            'time':      DateTime.now().toIso8601String(),
           });
           print('✅ $symbol HH @ ${result.hh} ($timeframe)');
         } else {
@@ -236,27 +246,27 @@ Future<void> _checkTimeframe(
 
     // ─── LL ─────────────────────────────────────────────
     if (result.ll != null) {
-      final key = 'LL_${symbol}_${timeframe}_${result.ll!.toStringAsFixed(5)}';
+      final key            = 'LL_${symbol}_${timeframe}_${result.ll!.toStringAsFixed(5)}';
       final alreadyAlerted = prefs.getBool(key) ?? false;
-      final isHit = PivotService.isHit(lastClosed, result.ll!, false) ||
-          PivotService.isHit(liveCandle, result.ll!, false);
+      final isHit          = PivotService.isHit(lastClosed, result.ll!, false) ||
+                             PivotService.isHit(liveCandle,  result.ll!, false);
 
       if (!alreadyAlerted && isHit) {
         final ok = await TelegramService.sendAlert(
-          levelType: 'LL',
-          levelPrice: result.ll!,
-          timeframe: timeframe,
+          levelType:    'LL',
+          levelPrice:   result.ll!,
+          timeframe:    timeframe,
           currentPrice: liveCandle.close,
-          symbol: symbol,
+          symbol:       symbol,
         );
         if (ok) {
           await prefs.setBool(key, true);
           service.invoke('alert', {
-            'symbol': symbol,
-            'type': 'LL',
-            'price': result.ll!,
+            'symbol':    symbol,
+            'type':      'LL',
+            'price':     result.ll!,
             'timeframe': timeframe,
-            'time': DateTime.now().toIso8601String(),
+            'time':      DateTime.now().toIso8601String(),
           });
           print('✅ $symbol LL @ ${result.ll} ($timeframe)');
         } else {
