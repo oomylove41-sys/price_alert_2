@@ -9,7 +9,8 @@ import '../config.dart';
 
 class AlertLog {
   final String symbol;
-  final String type;
+  final String type;    // 'HH' or 'LL'
+  final String kind;    // 'hit' or 'new'
   final double price;
   final String timeframe;
   final DateTime time;
@@ -17,6 +18,7 @@ class AlertLog {
   AlertLog({
     required this.symbol,
     required this.type,
+    required this.kind,
     required this.price,
     required this.timeframe,
     required this.time,
@@ -31,7 +33,7 @@ class HomeBody extends StatefulWidget {
 }
 
 class _HomeBodyState extends State<HomeBody> {
-  bool _isRunning   = false;
+  bool   _isRunning = false;
   String _lastCheck = '—';
   final List<AlertLog> _alertLogs = [];
 
@@ -42,13 +44,11 @@ class _HomeBodyState extends State<HomeBody> {
     _listenToBackground();
   }
 
-  // ─── Check if bot is already running ─────────────────
   Future<void> _checkIfRunning() async {
     final running = await FlutterBackgroundService().isRunning();
     if (mounted) setState(() => _isRunning = running);
   }
 
-  // ─── Listen to events from background service ─────────
   void _listenToBackground() {
     final service = FlutterBackgroundService();
 
@@ -64,11 +64,12 @@ class _HomeBodyState extends State<HomeBody> {
           _alertLogs.insert(
             0,
             AlertLog(
-              symbol:    data['symbol'],
-              type:      data['type'],
-              price:     (data['price'] as num).toDouble(),
-              timeframe: data['timeframe'],
-              time:      DateTime.parse(data['time']),
+              symbol:    data['symbol']    as String,
+              type:      data['type']      as String,
+              kind:      data['kind']      as String? ?? 'hit',
+              price:     (data['price']    as num).toDouble(),
+              timeframe: data['timeframe'] as String,
+              time:      DateTime.parse(data['time'] as String),
             ),
           );
         });
@@ -76,10 +77,8 @@ class _HomeBodyState extends State<HomeBody> {
     });
   }
 
-  // ─── Toggle bot ON / OFF ──────────────────────────────
   Future<void> _toggleBot() async {
     final service = FlutterBackgroundService();
-
     if (_isRunning) {
       service.invoke('stop');
       setState(() => _isRunning = false);
@@ -89,24 +88,21 @@ class _HomeBodyState extends State<HomeBody> {
     }
   }
 
-  // ─── Clear alerted levels ─────────────────────────────
   Future<void> _clearAlertedLevels() async {
     final prefs = await SharedPreferences.getInstance();
     final keys  = prefs.getKeys()
         .where((k) => k.startsWith('HH_') || k.startsWith('LL_'))
         .toList();
-
     for (final key in keys) {
       await prefs.remove(key);
     }
-
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: const Row(children: [
             Icon(Icons.check_circle, color: Colors.white, size: 18),
             SizedBox(width: 8),
-            Text('Alerted levels cleared'),
+            Text('All alerted levels cleared'),
           ]),
           backgroundColor: Colors.green.shade700,
           behavior: SnackBarBehavior.floating,
@@ -125,6 +121,10 @@ class _HomeBodyState extends State<HomeBody> {
     final isDark     = theme.brightness == Brightness.dark;
     final cardColor  = isDark ? const Color(0xFF1E1E2E) : Colors.white;
     final accentColor = _isRunning ? Colors.greenAccent : Colors.redAccent;
+
+    // Summarize active bots
+    final hitBots = Config.bots.where((b) => b.alertOnHit && b.isConfigured).length;
+    final newBots = Config.bots.where((b) => b.alertOnNew && b.isConfigured).length;
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -160,6 +160,33 @@ class _HomeBodyState extends State<HomeBody> {
                           '${Config.symbols.length} pairs · '
                           '${Config.timeframes.join(', ')}',
                           style: theme.textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 4),
+                        // Active bots summary
+                        Row(
+                          children: [
+                            if (hitBots > 0)
+                              _BadgeChip(
+                                label: '$hitBots hit bot${hitBots > 1 ? 's' : ''}',
+                                color: Colors.orange,
+                                isDark: isDark,
+                              ),
+                            if (hitBots > 0 && newBots > 0) const SizedBox(width: 6),
+                            if (newBots > 0)
+                              _BadgeChip(
+                                label: '$newBots new-level bot${newBots > 1 ? 's' : ''}',
+                                color: Colors.purple,
+                                isDark: isDark,
+                              ),
+                            if (hitBots == 0 && newBots == 0)
+                              Text(
+                                'No bots configured',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.red.shade400,
+                                ),
+                              ),
+                          ],
                         ),
                       ],
                     ),
@@ -274,12 +301,27 @@ class _HomeBodyState extends State<HomeBody> {
     );
   }
 
-  // ─── Alert tile ───────────────────────────────────────
   Widget _buildAlertTile(AlertLog log, bool isDark) {
-    final isHH   = log.type == 'HH';
-    final color  = isHH ? Colors.redAccent : Colors.greenAccent;
-    final emoji  = isHH ? '🔴' : '🟢';
-    final signal = isHH ? 'Resistance Hit' : 'Support Hit';
+    final isHH    = log.type == 'HH';
+    final isNew   = log.kind == 'new';
+
+    // Colors: orange tint for "new level", red/green for "hit"
+    final Color color;
+    final String emoji;
+    final String title;
+    final String subtitle;
+
+    if (isNew) {
+      color    = isHH ? Colors.orange.shade400 : Colors.purple.shade300;
+      emoji    = isHH ? '📈' : '📉';
+      title    = '$emoji ${log.symbol} · New ${isHH ? "HH" : "LL"} · ${log.timeframe}';
+      subtitle = isHH ? 'New Higher High Formed' : 'New Lower Low Formed';
+    } else {
+      color    = isHH ? Colors.redAccent : Colors.greenAccent;
+      emoji    = isHH ? '🔴' : '🟢';
+      title    = '$emoji ${log.symbol} · ${log.type} Hit · ${log.timeframe}';
+      subtitle = isHH ? 'Resistance Hit' : 'Support Hit';
+    }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -295,12 +337,10 @@ class _HomeBodyState extends State<HomeBody> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                '$emoji ${log.symbol} · ${log.type} · ${log.timeframe}',
-                style: const TextStyle(
-                    fontWeight: FontWeight.bold, fontSize: 13),
-              ),
-              Text(signal,
+              Text(title,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 13)),
+              Text(subtitle,
                   style: TextStyle(color: color, fontSize: 12)),
             ],
           ),
@@ -323,7 +363,6 @@ class _HomeBodyState extends State<HomeBody> {
     );
   }
 
-  // ─── Card wrapper ─────────────────────────────────────
   Widget _buildCard({required Widget child, required Color cardColor}) {
     return Container(
       width: double.infinity,
@@ -340,6 +379,30 @@ class _HomeBodyState extends State<HomeBody> {
         ],
       ),
       child: child,
+    );
+  }
+}
+
+// ─── Small badge chip ─────────────────────────────────────
+class _BadgeChip extends StatelessWidget {
+  final String label;
+  final Color  color;
+  final bool   isDark;
+  const _BadgeChip({required this.label, required this.color, required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.4)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w600),
+      ),
     );
   }
 }

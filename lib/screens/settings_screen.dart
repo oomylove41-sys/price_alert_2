@@ -1,5 +1,5 @@
 // ─── screens/settings_screen.dart ────────────────────────
-// Exports 5 public settings page widgets used by MainShell.
+// Exports public settings page widgets used by MainShell.
 // No Scaffold here — MainShell owns the Scaffold + bottom nav.
 
 import 'package:flutter/material.dart';
@@ -9,57 +9,431 @@ import '../services/binance_service.dart';
 import '../services/telegram_service.dart';
 
 // ══════════════════════════════════════════════════════════
-// ─── PAGE 1: TELEGRAM ────────────────────────────────────
+// ─── PAGE 1: TELEGRAM BOTS ───────────────────────────────
 // ══════════════════════════════════════════════════════════
-class TelegramSettingsPage extends StatefulWidget {
+class TelegramBotsPage extends StatefulWidget {
   final VoidCallback onSaved;
-  const TelegramSettingsPage({super.key, required this.onSaved});
+  const TelegramBotsPage({super.key, required this.onSaved});
 
   @override
-  State<TelegramSettingsPage> createState() => _TelegramSettingsPageState();
+  State<TelegramBotsPage> createState() => _TelegramBotsPageState();
 }
 
-class _TelegramSettingsPageState extends State<TelegramSettingsPage> {
+class _TelegramBotsPageState extends State<TelegramBotsPage> {
+  late List<TelegramBot> _bots;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _bots = List.from(Config.bots);
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    await ConfigService.saveBots(_bots);
+    setState(() => _saving = false);
+    widget.onSaved();
+  }
+
+  Future<void> _openEdit(TelegramBot bot) async {
+    final updated = await showModalBottomSheet<TelegramBot>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _BotEditSheet(bot: bot),
+    );
+    if (updated != null && mounted) {
+      setState(() {
+        final idx = _bots.indexWhere((b) => b.id == updated.id);
+        if (idx >= 0) {
+          _bots[idx] = updated;
+        } else {
+          _bots.add(updated);
+        }
+      });
+    }
+  }
+
+  void _addBot() {
+    _openEdit(TelegramBot(
+      id:         DateTime.now().millisecondsSinceEpoch.toString(),
+      name:       'Bot ${_bots.length + 1}',
+      token:      '',
+      chatId:     '',
+      alertOnHit: true,
+      alertOnNew: false,
+    ));
+  }
+
+  void _deleteBot(String id) {
+    if (_bots.length <= 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('At least one bot is required'),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          margin: const EdgeInsets.all(12),
+        ),
+      );
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Bot'),
+        content: const Text('Are you sure you want to delete this bot?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              setState(() => _bots.removeWhere((b) => b.id == id));
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _PageScaffold(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _InfoBanner(
+            icon: Icons.send_rounded,
+            text:
+                'Configure one or more Telegram bots. Each bot can receive '
+                '"Hit" alerts (price touches a level) and/or "New Level" alerts '
+                '(a fresh HH/LL pivot forms).',
+          ),
+          const SizedBox(height: 16),
+
+          // Bot list
+          ..._bots.asMap().entries.map((entry) => _BotCard(
+                bot:      entry.value,
+                index:    entry.key,
+                onEdit:   () => _openEdit(entry.value),
+                onDelete: () => _deleteBot(entry.value.id),
+              )),
+
+          const SizedBox(height: 12),
+
+          // Add bot button
+          SizedBox(
+            width: double.infinity,
+            height: 44,
+            child: OutlinedButton.icon(
+              onPressed: _addBot,
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: const Text('Add Another Bot'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.blueAccent,
+                side: const BorderSide(color: Colors.blueAccent),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+          _SaveButton(onPressed: _save, loading: _saving),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Bot card (summary) ───────────────────────────────────
+class _BotCard extends StatefulWidget {
+  final TelegramBot bot;
+  final int         index;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+  const _BotCard({
+    required this.bot,
+    required this.index,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  @override
+  State<_BotCard> createState() => _BotCardState();
+}
+
+class _BotCardState extends State<_BotCard> {
+  bool _testing = false;
+
+  Future<void> _test() async {
+    setState(() => _testing = true);
+    final error = await TelegramService.testConnection(widget.bot);
+    setState(() => _testing = false);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(children: [
+          Icon(
+            error == null ? Icons.check_circle : Icons.error_outline,
+            color: Colors.white,
+            size: 18,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(error == null
+                ? '✅ Test message sent to ${widget.bot.name}!'
+                : '❌ ${widget.bot.name}: $error'),
+          ),
+        ]),
+        backgroundColor:
+            error == null ? Colors.green.shade700 : Colors.red.shade700,
+        behavior: SnackBarBehavior.floating,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(12),
+        duration: Duration(seconds: error == null ? 3 : 5),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bot    = widget.bot;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E1E2E) : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: bot.isConfigured
+              ? Colors.blueAccent.withOpacity(0.3)
+              : Colors.orange.withOpacity(0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header row
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: Colors.blueAccent.withOpacity(0.15),
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  '${widget.index + 1}',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blueAccent,
+                      fontSize: 14),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      bot.name,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                    Text(
+                      bot.isConfigured
+                          ? 'Configured ✓'
+                          : '⚠ Not yet configured',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: bot.isConfigured
+                            ? Colors.green
+                            : Colors.orange,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Edit
+              IconButton(
+                icon: const Icon(Icons.edit_rounded, size: 20),
+                color: Colors.blueAccent,
+                tooltip: 'Edit bot',
+                onPressed: widget.onEdit,
+              ),
+              // Delete
+              IconButton(
+                icon: const Icon(Icons.delete_outline_rounded, size: 20),
+                color: Colors.redAccent,
+                tooltip: 'Delete bot',
+                onPressed: widget.onDelete,
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 10),
+
+          // Alert type badges
+          Row(
+            children: [
+              _AlertBadge(
+                label: '🎯 Hit alerts',
+                enabled: bot.alertOnHit,
+                color: Colors.orange,
+              ),
+              const SizedBox(width: 8),
+              _AlertBadge(
+                label: '✨ New level',
+                enabled: bot.alertOnNew,
+                color: Colors.purple,
+              ),
+            ],
+          ),
+
+          // Token preview
+          if (bot.token.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Token: ${_mask(bot.token)}',
+              style: TextStyle(
+                  fontSize: 11,
+                  color: isDark
+                      ? Colors.grey.shade400
+                      : Colors.grey.shade600),
+            ),
+          ],
+
+          const SizedBox(height: 10),
+
+          // Test button
+          SizedBox(
+            width: double.infinity,
+            height: 38,
+            child: OutlinedButton.icon(
+              onPressed: (bot.isConfigured && !_testing) ? _test : null,
+              icon: _testing
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor:
+                              AlwaysStoppedAnimation(Colors.blueAccent)),
+                    )
+                  : const Icon(Icons.send_rounded, size: 14),
+              label: Text(_testing ? 'Sending...' : 'Test Connection',
+                  style: const TextStyle(fontSize: 12)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.blueAccent,
+                side: const BorderSide(color: Colors.blueAccent),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _mask(String s) {
+    if (s.length <= 8) return '****';
+    return '${s.substring(0, 4)}...${s.substring(s.length - 4)}';
+  }
+}
+
+// ─── Alert type badge ─────────────────────────────────────
+class _AlertBadge extends StatelessWidget {
+  final String label;
+  final bool   enabled;
+  final Color  color;
+  const _AlertBadge(
+      {required this.label, required this.enabled, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: enabled ? color.withOpacity(0.15) : Colors.grey.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: enabled ? color.withOpacity(0.5) : Colors.grey.withOpacity(0.3),
+        ),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: enabled ? color : Colors.grey,
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Bot edit sheet (modal) ───────────────────────────────
+class _BotEditSheet extends StatefulWidget {
+  final TelegramBot bot;
+  const _BotEditSheet({required this.bot});
+
+  @override
+  State<_BotEditSheet> createState() => _BotEditSheetState();
+}
+
+class _BotEditSheetState extends State<_BotEditSheet> {
   final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _nameCtrl;
   late final TextEditingController _tokenCtrl;
   late final TextEditingController _chatCtrl;
+  late bool _alertOnHit;
+  late bool _alertOnNew;
   bool _obscureToken = true;
-  bool _saving       = false;
   bool _testing      = false;
 
   @override
   void initState() {
     super.initState();
-    _tokenCtrl = TextEditingController(text: Config.botToken);
-    _chatCtrl  = TextEditingController(text: Config.chatId);
+    _nameCtrl    = TextEditingController(text: widget.bot.name);
+    _tokenCtrl   = TextEditingController(text: widget.bot.token);
+    _chatCtrl    = TextEditingController(text: widget.bot.chatId);
+    _alertOnHit  = widget.bot.alertOnHit;
+    _alertOnNew  = widget.bot.alertOnNew;
   }
 
   @override
   void dispose() {
+    _nameCtrl.dispose();
     _tokenCtrl.dispose();
     _chatCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() => _saving = true);
-    await ConfigService.saveTelegram(
-      botToken: _tokenCtrl.text.trim(),
-      chatId:   _chatCtrl.text.trim(),
-    );
-    setState(() => _saving = false);
-    widget.onSaved();
-  }
+  TelegramBot _buildBot() => widget.bot.copyWith(
+    name:       _nameCtrl.text.trim(),
+    token:      _tokenCtrl.text.trim(),
+    chatId:     _chatCtrl.text.trim(),
+    alertOnHit: _alertOnHit,
+    alertOnNew: _alertOnNew,
+  );
 
   Future<void> _testConnection() async {
     if (!_formKey.currentState!.validate()) return;
-    await ConfigService.saveTelegram(
-      botToken: _tokenCtrl.text.trim(),
-      chatId:   _chatCtrl.text.trim(),
-    );
     setState(() => _testing = true);
-    final error = await TelegramService.testConnection();
+    final tempBot = _buildBot();
+    final error   = await TelegramService.testConnection(tempBot);
     setState(() => _testing = false);
     if (!mounted) return;
 
@@ -89,82 +463,261 @@ class _TelegramSettingsPageState extends State<TelegramSettingsPage> {
     );
   }
 
+  void _save() {
+    if (!_formKey.currentState!.validate()) return;
+    if (!_alertOnHit && !_alertOnNew) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Enable at least one alert type'),
+          backgroundColor: Colors.orange.shade700,
+          behavior: SnackBarBehavior.floating,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          margin: const EdgeInsets.all(12),
+        ),
+      );
+      return;
+    }
+    Navigator.pop(context, _buildBot());
+  }
+
   @override
   Widget build(BuildContext context) {
-    return _PageScaffold(
-      child: Form(
-        key: _formKey,
+    final isDark      = Theme.of(context).brightness == Brightness.dark;
+    final sheetColor  = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.9,
+      minChildSize:     0.5,
+      maxChildSize:     0.95,
+      builder: (_, controller) => Container(
+        decoration: BoxDecoration(
+          color: sheetColor,
+          borderRadius:
+              const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _InfoBanner(
-              icon: Icons.info_outline_rounded,
-              text:
-                  'Enter your Telegram bot token and chat ID, then tap "Test Connection" to verify.',
-            ),
-            const SizedBox(height: 20),
-
-            _FieldLabel('Bot Token'),
-            _StyledField(
-              controller: _tokenCtrl,
-              hint: 'e.g. 123456:ABC-DEF...',
-              obscure: _obscureToken,
-              suffixIcon: IconButton(
-                icon: Icon(
-                  _obscureToken ? Icons.visibility_off : Icons.visibility,
-                  size: 20,
-                ),
-                onPressed: () =>
-                    setState(() => _obscureToken = !_obscureToken),
-              ),
-              validator: (v) => (v == null || v.trim().isEmpty)
-                  ? 'Bot token is required'
-                  : null,
-              inputType: TextInputType.visiblePassword,
-            ),
-
-            const SizedBox(height: 16),
-            _FieldLabel('Chat ID'),
-            _StyledField(
-              controller: _chatCtrl,
-              hint: 'e.g. -100123456789',
-              validator: (v) => (v == null || v.trim().isEmpty)
-                  ? 'Chat ID is required'
-                  : null,
-              inputType: TextInputType.number,
-            ),
-
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: OutlinedButton.icon(
-                onPressed: (_testing || _saving) ? null : _testConnection,
-                icon: _testing
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor:
-                              AlwaysStoppedAnimation(Colors.blueAccent),
-                        ),
-                      )
-                    : const Icon(Icons.send_rounded, size: 18),
-                label: Text(_testing ? 'Sending test...' : 'Test Connection'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.blueAccent,
-                  side: const BorderSide(color: Colors.blueAccent),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-            ),
-
             const SizedBox(height: 12),
-            _SaveButton(onPressed: _save, loading: _saving),
+            // Drag handle
+            Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: isDark ? Colors.grey.shade700 : Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 8, 0),
+              child: Row(
+                children: [
+                  const Icon(Icons.smart_toy_rounded,
+                      color: Colors.blueAccent, size: 22),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      widget.bot.token.isEmpty
+                          ? 'Add New Bot'
+                          : 'Edit Bot',
+                      style: const TextStyle(
+                          fontSize: 17, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+
+            // Form
+            Expanded(
+              child: SingleChildScrollView(
+                controller: controller,
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+
+                      // ─── Bot Name ──────────────────
+                      _FieldLabel('Bot Name'),
+                      _StyledField(
+                        controller: _nameCtrl,
+                        hint: 'e.g. Price Alert Bot',
+                        validator: (v) => (v == null || v.trim().isEmpty)
+                            ? 'Name is required'
+                            : null,
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      // ─── Token ─────────────────────
+                      _FieldLabel('Bot Token'),
+                      _StyledField(
+                        controller: _tokenCtrl,
+                        hint: 'e.g. 123456:ABC-DEF...',
+                        obscure: _obscureToken,
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            _obscureToken
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                            size: 20,
+                          ),
+                          onPressed: () =>
+                              setState(() => _obscureToken = !_obscureToken),
+                        ),
+                        validator: (v) => (v == null || v.trim().isEmpty)
+                            ? 'Bot token is required'
+                            : null,
+                        inputType: TextInputType.visiblePassword,
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      // ─── Chat ID ───────────────────
+                      _FieldLabel('Chat ID'),
+                      _StyledField(
+                        controller: _chatCtrl,
+                        hint: 'e.g. -100123456789',
+                        validator: (v) => (v == null || v.trim().isEmpty)
+                            ? 'Chat ID is required'
+                            : null,
+                        inputType: TextInputType.number,
+                      ),
+
+                      const SizedBox(height: 24),
+
+                      // ─── Alert types ───────────────
+                      const _FieldLabel('Alert Types'),
+                      const SizedBox(height: 8),
+                      _AlertTypeToggle(
+                        title: '🎯 Price Hits HH/LL Level',
+                        subtitle:
+                            'Alert when current price touches an existing '
+                            'Higher High or Lower Low level.',
+                        value: _alertOnHit,
+                        color: Colors.orange,
+                        onChanged: (v) => setState(() => _alertOnHit = v),
+                      ),
+                      const SizedBox(height: 10),
+                      _AlertTypeToggle(
+                        title: '✨ New HH/LL Level Formed',
+                        subtitle:
+                            'Alert when a new Higher High or Lower Low pivot '
+                            'is detected on the chart.',
+                        value: _alertOnNew,
+                        color: Colors.purple,
+                        onChanged: (v) => setState(() => _alertOnNew = v),
+                      ),
+
+                      const SizedBox(height: 24),
+
+                      // ─── Test button ───────────────
+                      SizedBox(
+                        width: double.infinity,
+                        height: 48,
+                        child: OutlinedButton.icon(
+                          onPressed: _testing ? null : _testConnection,
+                          icon: _testing
+                              ? const SizedBox(
+                                  width: 16, height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation(
+                                        Colors.blueAccent),
+                                  ),
+                                )
+                              : const Icon(Icons.send_rounded, size: 18),
+                          label: Text(
+                              _testing ? 'Sending test...' : 'Test Connection'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.blueAccent,
+                            side:
+                                const BorderSide(color: Colors.blueAccent),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 12),
+                      _SaveButton(onPressed: _save, loading: false),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─── Alert type toggle card ───────────────────────────────
+class _AlertTypeToggle extends StatelessWidget {
+  final String   title;
+  final String   subtitle;
+  final bool     value;
+  final Color    color;
+  final ValueChanged<bool> onChanged;
+  const _AlertTypeToggle({
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.color,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: value
+            ? color.withOpacity(0.08)
+            : (isDark ? const Color(0xFF1A1A2E) : Colors.grey.shade50),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: value
+              ? color.withOpacity(0.4)
+              : (isDark ? Colors.grey.shade700 : Colors.grey.shade300),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: value ? color : null)),
+                const SizedBox(height: 3),
+                Text(subtitle,
+                    style: TextStyle(
+                        fontSize: 11.5,
+                        color: isDark
+                            ? Colors.grey.shade400
+                            : Colors.grey.shade600)),
+              ],
+            ),
+          ),
+          Switch(
+            value: value,
+            onChanged: onChanged,
+            activeColor: color,
+          ),
+        ],
       ),
     );
   }
@@ -329,12 +882,10 @@ class _TradingPairsSettingsPageState extends State<TradingPairsSettingsPage> {
                   ),
                   child: _validating
                       ? const SizedBox(
-                          width: 18,
-                          height: 18,
+                          width: 18, height: 18,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            valueColor:
-                                AlwaysStoppedAnimation(Colors.white),
+                            valueColor: AlwaysStoppedAnimation(Colors.white),
                           ),
                         )
                       : const Icon(Icons.add_rounded, size: 22),
@@ -737,7 +1288,7 @@ class _BotSettingsPageState extends State<BotSettingsPage> {
 }
 
 // ══════════════════════════════════════════════════════════
-// ─── SHARED PRIVATE WIDGETS ──────────────────────────────
+// ─── SHARED PRIVATE WIDGETS ──────────────────────════════
 // ══════════════════════════════════════════════════════════
 
 class _PageScaffold extends StatelessWidget {
@@ -840,11 +1391,9 @@ class _StyledField extends StatelessWidget {
       style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle:
-            TextStyle(color: Colors.grey.shade500, fontSize: 13),
+        hintStyle: TextStyle(color: Colors.grey.shade500, fontSize: 13),
         helperText: helperText,
-        helperStyle:
-            TextStyle(fontSize: 11, color: Colors.grey.shade500),
+        helperStyle: TextStyle(fontSize: 11, color: Colors.grey.shade500),
         suffixIcon: suffixIcon,
         filled: true,
         fillColor: isDark ? const Color(0xFF1E1E2E) : Colors.white,
@@ -856,9 +1405,7 @@ class _StyledField extends StatelessWidget {
         enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(10),
             borderSide: BorderSide(
-                color: isDark
-                    ? Colors.grey.shade700
-                    : Colors.grey.shade300)),
+                color: isDark ? Colors.grey.shade700 : Colors.grey.shade300)),
         focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(10),
             borderSide:
@@ -897,16 +1444,15 @@ class _SaveButton extends StatelessWidget {
         ),
         child: loading
             ? const SizedBox(
-                width: 20,
-                height: 20,
+                width: 20, height: 20,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
                   valueColor: AlwaysStoppedAnimation(Colors.white),
                 ),
               )
             : const Text('Save Changes',
-                style: TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w600)),
+                style:
+                    TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
       ),
     );
   }

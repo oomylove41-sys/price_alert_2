@@ -1,7 +1,7 @@
 // ─── screens/main_shell.dart ─────────────────────────────
 // Root widget. 5-tab BottomNavigationBar (Home, Pairs,
-// Timeframes, Indicator, Bot). Telegram accessible via the
-// top-right send icon in the AppBar.
+// Timeframes, Indicator, Bot). Telegram bots accessible via
+// the top-right send icon in the AppBar.
 
 import 'package:flutter/material.dart';
 import 'home_screen.dart';
@@ -17,7 +17,6 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _index = 0;
 
-  // ─── 5 bottom nav tabs ───────────────────────────────
   static const _tabs = [
     _TabItem(label: 'Home',       icon: Icons.home_rounded),
     _TabItem(label: 'Pairs',      icon: Icons.currency_bitcoin),
@@ -34,7 +33,6 @@ class _MainShellState extends State<MainShell> {
     'Bot Settings',
   ];
 
-  // ─── Snackbar on save ────────────────────────────────
   void _onSaved() {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -52,13 +50,13 @@ class _MainShellState extends State<MainShell> {
     );
   }
 
-  // ─── Open Telegram settings as a modal bottom sheet ──
-  void _openTelegram() {
+  // ─── Open Telegram Bots as a modal bottom sheet ───────
+  void _openTelegramBots() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _TelegramSheet(onSaved: _onSaved),
+      builder: (_) => _TelegramBotsSheet(onSaved: _onSaved),
     );
   }
 
@@ -66,7 +64,6 @@ class _MainShellState extends State<MainShell> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // IndexedStack keeps all pages alive so state is preserved
     final pages = [
       const HomeBody(),
       TradingPairsSettingsPage(onSaved: _onSaved),
@@ -80,11 +77,10 @@ class _MainShellState extends State<MainShell> {
         title: Text(_titles[_index]),
         centerTitle: false,
         actions: [
-          // ─── Telegram icon top-right ───────────────
           IconButton(
-            tooltip: 'Telegram Settings',
-            icon: const Icon(Icons.send_rounded),
-            onPressed: _openTelegram,
+            tooltip: 'Telegram Bots',
+            icon: const Icon(Icons.smart_toy_rounded),
+            onPressed: _openTelegramBots,
           ),
         ],
       ),
@@ -115,7 +111,6 @@ class _MainShellState extends State<MainShell> {
   }
 }
 
-// ─── Tab definition ───────────────────────────────────────
 class _TabItem {
   final String label;
   final IconData icon;
@@ -123,21 +118,21 @@ class _TabItem {
 }
 
 // ══════════════════════════════════════════════════════════
-// ─── TELEGRAM BOTTOM SHEET ───────────────────────────────
+// ─── TELEGRAM BOTS BOTTOM SHEET ──────────────────────────
 // ══════════════════════════════════════════════════════════
-class _TelegramSheet extends StatelessWidget {
+class _TelegramBotsSheet extends StatelessWidget {
   final VoidCallback onSaved;
-  const _TelegramSheet({required this.onSaved});
+  const _TelegramBotsSheet({required this.onSaved});
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final sheetColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+    final isDark      = Theme.of(context).brightness == Brightness.dark;
+    final sheetColor  = isDark ? const Color(0xFF1E1E2E) : Colors.white;
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.85,
-      minChildSize: 0.5,
-      maxChildSize: 0.95,
+      initialChildSize: 0.9,
+      minChildSize:     0.5,
+      maxChildSize:     0.97,
       builder: (_, controller) => Container(
         decoration: BoxDecoration(
           color: sheetColor,
@@ -146,11 +141,10 @@ class _TelegramSheet extends StatelessWidget {
         ),
         child: Column(
           children: [
-            // ─── Drag handle ───────────────────────
             const SizedBox(height: 12),
+            // Drag handle
             Container(
-              width: 40,
-              height: 4,
+              width: 40, height: 4,
               decoration: BoxDecoration(
                 color: isDark
                     ? Colors.grey.shade700
@@ -158,20 +152,18 @@ class _TelegramSheet extends StatelessWidget {
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
-            // ─── Header ────────────────────────────
+            // Header
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 8, 0),
               child: Row(
                 children: [
-                  const Icon(Icons.send_rounded,
-                      color: Colors.blueAccent, size: 20),
+                  const Icon(Icons.smart_toy_rounded,
+                      color: Colors.blueAccent, size: 22),
                   const SizedBox(width: 10),
                   const Text(
-                    'Telegram Settings',
+                    'Telegram Bots',
                     style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.bold,
-                    ),
+                        fontSize: 17, fontWeight: FontWeight.bold),
                   ),
                   const Spacer(),
                   IconButton(
@@ -182,11 +174,11 @@ class _TelegramSheet extends StatelessWidget {
               ),
             ),
             const Divider(height: 1),
-            // ─── Page content ──────────────────────
+            // Page content
             Expanded(
               child: SingleChildScrollView(
                 controller: controller,
-                child: TelegramSettingsPage(
+                child: TelegramBotsPage(
                   onSaved: () {
                     onSaved();
                     Navigator.pop(context);
