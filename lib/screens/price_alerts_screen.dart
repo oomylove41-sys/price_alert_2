@@ -276,6 +276,7 @@ class _AlertCard extends StatelessWidget {
   Color get _borderColor {
     if (alert.isTriggered) return Colors.grey.shade400;
     if (!alert.isActive)   return Colors.grey.shade500;
+    if (alert.condition == 'touch') return Colors.teal.shade400;
     return alert.condition == 'above'
         ? Colors.orange.shade400
         : Colors.green.shade400;
@@ -284,8 +285,11 @@ class _AlertCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isAbove  = alert.condition == 'above';
-    final dirEmoji = isAbove ? '▲' : '▼';
-    final dirColor = isAbove ? Colors.orange.shade400 : Colors.green.shade400;
+    final isTouch  = alert.condition == 'touch';
+    final dirEmoji = isTouch ? '⬡' : (isAbove ? '▲' : '▼');
+    final dirColor = isTouch
+        ? Colors.teal.shade400
+        : (isAbove ? Colors.orange.shade400 : Colors.green.shade400);
     final cardBg   = isDark ? const Color(0xFF1E1E2E) : Colors.white;
 
     // Find bot name
@@ -363,8 +367,10 @@ class _AlertCard extends StatelessWidget {
                               fontWeight: FontWeight.bold)),
                       const SizedBox(width: 4),
                       Text(
-                        'When price goes ${isAbove ? "above" : "below"} '
-                        '${_fmt(alert.targetPrice)}',
+                        isTouch
+                            ? 'When price touches ${_fmt(alert.targetPrice)}'
+                            : 'When price goes ${isAbove ? "above" : "below"} '
+                              '${_fmt(alert.targetPrice)}',
                         style: TextStyle(
                           fontSize: 12.5,
                           color: alert.isTriggered
@@ -483,11 +489,15 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
 
   String _defaultBotId() {
     if (Config.bots.isEmpty) return '';
+    // Prefer bots that have manual alerts enabled
     try {
-      return Config.bots.firstWhere((b) => b.isConfigured).id;
-    } catch (_) {
-      return Config.bots.first.id;
-    }
+      return Config.bots
+          .firstWhere((b) => b.isConfigured && b.canReceiveManualAlerts)
+          .id;
+    } catch (_) {}
+    // Fall back to any configured bot
+    try { return Config.bots.firstWhere((b) => b.isConfigured).id; }
+    catch (_) { return Config.bots.first.id; }
   }
 
   @override
@@ -527,9 +537,18 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
       _snack('Validate the symbol first', isError: true);
       return;
     }
-    if (Config.bots.isEmpty) {
-      _snack('Add a Telegram bot first', isError: true);
+    final eligibleBots = Config.bots.where((b) => b.canReceiveManualAlerts).toList();
+    if (eligibleBots.isEmpty) {
+      _snack(
+        'No bots have "Manual Price Alerts" enabled.\n'
+        'Edit a bot and enable it first.',
+        isError: true,
+      );
       return;
+    }
+    // If selected bot is no longer eligible, auto-pick first eligible
+    if (!eligibleBots.any((b) => b.id == _selectedBotId)) {
+      _selectedBotId = eligibleBots.first.id;
     }
     Navigator.pop(context, _build());
   }
@@ -702,27 +721,38 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
                       // ── Condition ──────────────────────
                       const _Label('Alert Condition'),
                       const SizedBox(height: 8),
-                      Row(children: [
-                        Expanded(
-                          child: _ConditionButton(
-                            label:     '▲  Above target',
-                            subtitle:  'Alert when price ≥ target',
-                            selected:  _condition == 'above',
-                            color:     Colors.orange,
-                            isDark:    isDark,
-                            onTap:     () => setState(() => _condition = 'above'),
+                      Column(children: [
+                        Row(children: [
+                          Expanded(
+                            child: _ConditionButton(
+                              label:    '▲  Cross Above',
+                              subtitle: 'Price ≥ target',
+                              selected: _condition == 'above',
+                              color:    Colors.orange,
+                              isDark:   isDark,
+                              onTap:    () => setState(() => _condition = 'above'),
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: _ConditionButton(
-                            label:     '▼  Below target',
-                            subtitle:  'Alert when price ≤ target',
-                            selected:  _condition == 'below',
-                            color:     Colors.green,
-                            isDark:    isDark,
-                            onTap:     () => setState(() => _condition = 'below'),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _ConditionButton(
+                              label:    '▼  Cross Below',
+                              subtitle: 'Price ≤ target',
+                              selected: _condition == 'below',
+                              color:    Colors.green,
+                              isDark:   isDark,
+                              onTap:    () => setState(() => _condition = 'below'),
+                            ),
                           ),
+                        ]),
+                        const SizedBox(height: 10),
+                        _ConditionButton(
+                          label:    '⬡  Touch',
+                          subtitle: 'Price comes within 0.2% of target (either side)',
+                          selected: _condition == 'touch',
+                          color:    Colors.teal,
+                          isDark:   isDark,
+                          onTap:    () => setState(() => _condition = 'touch'),
                         ),
                       ]),
                       const SizedBox(height: 20),
@@ -731,30 +761,13 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
                       const _Label('Send Alert Via'),
                       const SizedBox(height: 8),
                       if (bots.isEmpty)
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                                color: Colors.orange.withOpacity(0.4)),
-                          ),
-                          child: Row(children: [
-                            Icon(Icons.warning_amber_rounded,
-                                color: Colors.orange.shade600, size: 18),
-                            const SizedBox(width: 10),
-                            const Expanded(
-                              child: Text(
-                                'No Telegram bots configured yet.\n'
-                                'Add a bot from the main screen first.',
-                                style: TextStyle(
-                                    fontSize: 12.5, color: Colors.orange),
-                              ),
-                            ),
-                          ]),
-                        )
+                        _NoBotWarning(reason: 'no-bots')
+                      else if (bots.where((b) => b.canReceiveManualAlerts).isEmpty)
+                        _NoBotWarning(reason: 'none-enabled')
                       else
-                        ...bots.map((bot) => _BotOption(
+                        ...bots
+                            .where((b) => b.canReceiveManualAlerts)
+                            .map((bot) => _BotOption(
                           bot:      bot,
                           selected: bot.id == _selectedBotId,
                           isDark:   isDark,
@@ -797,6 +810,41 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
 
   String _fmtRaw(double v) => v.toStringAsFixed(
       v >= 1000 ? 2 : v >= 1 ? 4 : 6);
+}
+
+// ─── No-bot warning banner ────────────────────────────────
+class _NoBotWarning extends StatelessWidget {
+  final String reason; // 'no-bots' | 'none-enabled'
+  const _NoBotWarning({required this.reason});
+
+  @override
+  Widget build(BuildContext context) {
+    final msg = reason == 'no-bots'
+        ? 'No Telegram bots configured yet.\nAdd a bot from the main screen first.'
+        : 'No bots have "Manual Price Alerts" enabled.\n'
+          'Open a bot (🤖 icon top-right) → enable 🔔 Manual Price Alerts.';
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.orange.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.orange.withOpacity(0.4)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.warning_amber_rounded,
+              color: Colors.orange.shade600, size: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(msg,
+                style: const TextStyle(
+                    fontSize: 12.5, color: Colors.orange)),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // ─── Condition toggle button ──────────────────────────────

@@ -277,6 +277,11 @@ class _BotCardState extends State<_BotCard> {
             color: Colors.purple,
           ),
 
+          const SizedBox(height: 6),
+
+          // ── Manual price alerts toggle ───────────────────
+          _ManualAlertSummaryRow(enabled: bot.canReceiveManualAlerts),
+
           if (bot.token.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(
@@ -322,6 +327,45 @@ class _BotCardState extends State<_BotCard> {
 
   String _mask(String s) =>
       s.length <= 8 ? '****' : '${s.substring(0, 4)}...${s.substring(s.length - 4)}';
+}
+
+// ─── Manual alert summary row ─────────────────────────────
+class _ManualAlertSummaryRow extends StatelessWidget {
+  final bool enabled;
+  const _ManualAlertSummaryRow({required this.enabled});
+
+  @override
+  Widget build(BuildContext context) {
+    const color = Colors.teal;
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: enabled ? color.withOpacity(0.12) : Colors.grey.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: enabled ? color.withOpacity(0.4) : Colors.grey.withOpacity(0.25),
+            ),
+          ),
+          child: Text(
+            '🔔 Manual alerts',
+            style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: enabled ? color : Colors.grey),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          enabled ? 'Enabled' : 'Off',
+          style: TextStyle(
+              fontSize: 11,
+              color: enabled ? color : Colors.grey.shade500),
+        ),
+      ],
+    );
+  }
 }
 
 // ─── Timeframe summary row ────────────────────────────────
@@ -403,6 +447,7 @@ class _BotEditSheetState extends State<_BotEditSheet> {
   late final TextEditingController _chatCtrl;
   late List<String> _hitTimeframes;
   late List<String> _newTimeframes;
+  late bool _manualAlerts;
   bool _obscureToken = true;
   bool _testing      = false;
 
@@ -414,6 +459,7 @@ class _BotEditSheetState extends State<_BotEditSheet> {
     _chatCtrl       = TextEditingController(text: widget.bot.chatId);
     _hitTimeframes  = List.from(widget.bot.hitTimeframes);
     _newTimeframes  = List.from(widget.bot.newTimeframes);
+    _manualAlerts   = widget.bot.canReceiveManualAlerts;
   }
 
   @override
@@ -425,11 +471,12 @@ class _BotEditSheetState extends State<_BotEditSheet> {
   }
 
   TelegramBot _buildBot() => widget.bot.copyWith(
-    name:          _nameCtrl.text.trim(),
-    token:         _tokenCtrl.text.trim(),
-    chatId:        _chatCtrl.text.trim(),
-    hitTimeframes: List.from(_hitTimeframes),
-    newTimeframes: List.from(_newTimeframes),
+    name:                   _nameCtrl.text.trim(),
+    token:                  _tokenCtrl.text.trim(),
+    chatId:                 _chatCtrl.text.trim(),
+    hitTimeframes:          List.from(_hitTimeframes),
+    newTimeframes:          List.from(_newTimeframes),
+    canReceiveManualAlerts: _manualAlerts,
   );
 
   Future<void> _testConnection() async {
@@ -459,10 +506,10 @@ class _BotEditSheetState extends State<_BotEditSheet> {
 
   void _save() {
     if (!_formKey.currentState!.validate()) return;
-    if (_hitTimeframes.isEmpty && _newTimeframes.isEmpty) {
+    if (_hitTimeframes.isEmpty && _newTimeframes.isEmpty && !_manualAlerts) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: const Text(
-            'Select at least one timeframe for Hit or New Level alerts.'),
+            'Enable at least one alert type: Hit, New Level, or Manual Alerts.'),
         backgroundColor: Colors.orange.shade700,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -619,6 +666,15 @@ class _BotEditSheetState extends State<_BotEditSheet> {
                           }
                         }),
                       ),
+                      const SizedBox(height: 24),
+
+                      // ══════════════════════════════════
+                      // ALERT TYPE 3: MANUAL PRICE ALERTS
+                      // ══════════════════════════════════
+                      _ManualAlertSection(
+                        enabled:   _manualAlerts,
+                        onChanged: (v) => setState(() => _manualAlerts = v),
+                      ),
                       const SizedBox(height: 28),
 
                       // ── Test ───────────────────────────
@@ -656,6 +712,67 @@ class _BotEditSheetState extends State<_BotEditSheet> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─── Manual alert toggle section ─────────────────────────
+class _ManualAlertSection extends StatelessWidget {
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+  const _ManualAlertSection({required this.enabled, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    const color  = Colors.teal;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: enabled
+            ? color.withOpacity(0.06)
+            : (isDark ? const Color(0xFF1A1A2E) : Colors.grey.shade50),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: enabled
+              ? color.withOpacity(0.35)
+              : (isDark ? Colors.grey.shade700 : Colors.grey.shade300),
+        ),
+      ),
+      child: Row(
+        children: [
+          const Text('🔔', style: TextStyle(fontSize: 18)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Manual Price Alerts',
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13.5,
+                        color: enabled ? color : null)),
+                const SizedBox(height: 2),
+                Text(
+                  'This bot can be selected when creating manual\n'
+                  'price alerts (cross above / below / touch).',
+                  style: TextStyle(
+                      fontSize: 11.5,
+                      color: isDark
+                          ? Colors.grey.shade400
+                          : Colors.grey.shade600),
+                ),
+              ],
+            ),
+          ),
+          Switch(
+            value: enabled,
+            onChanged: onChanged,
+            activeColor: color,
+          ),
+        ],
       ),
     );
   }

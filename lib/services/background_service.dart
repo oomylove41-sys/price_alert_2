@@ -274,14 +274,16 @@ Future<void> _checkPriceAlerts(
     for (final alert in entry.value) {
       if (!alert.matches(currentPrice)) continue;
 
-      // Find the bot
+      // Find the specific bot assigned to this alert
       TelegramBot? bot;
       try {
         bot = Config.bots.firstWhere((b) => b.id == alert.botId);
       } catch (_) {
-        // Bot was deleted — fall back to first configured bot
-        try { bot = Config.bots.firstWhere((b) => b.isConfigured); }
-        catch (_) { /* no bots configured */ }
+        // Bot deleted — fall back to first bot with manual alerts enabled
+        try {
+          bot = Config.bots.firstWhere(
+              (b) => b.isConfigured && b.canReceiveManualAlerts);
+        } catch (_) { /* none available */ }
       }
 
       if (bot == null || !bot.isConfigured) {

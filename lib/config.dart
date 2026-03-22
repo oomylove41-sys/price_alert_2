@@ -24,6 +24,9 @@ class TelegramBot {
   List<String> hitTimeframes;
   List<String> newTimeframes;
 
+  /// Whether this bot can be selected for manual price alerts.
+  bool canReceiveManualAlerts;
+
   TelegramBot({
     required this.id,
     required this.name,
@@ -31,6 +34,7 @@ class TelegramBot {
     required this.chatId,
     List<String>? hitTimeframes,
     List<String>? newTimeframes,
+    this.canReceiveManualAlerts = false,
   })  : hitTimeframes = hitTimeframes ?? [],
         newTimeframes = newTimeframes ?? [];
 
@@ -45,18 +49,21 @@ class TelegramBot {
   TelegramBot copyWith({
     String? name, String? token, String? chatId,
     List<String>? hitTimeframes, List<String>? newTimeframes,
+    bool? canReceiveManualAlerts,
   }) => TelegramBot(
     id: id,
-    name:          name          ?? this.name,
-    token:         token         ?? this.token,
-    chatId:        chatId        ?? this.chatId,
-    hitTimeframes: hitTimeframes ?? List.from(this.hitTimeframes),
-    newTimeframes: newTimeframes ?? List.from(this.newTimeframes),
+    name:                   name                   ?? this.name,
+    token:                  token                  ?? this.token,
+    chatId:                 chatId                 ?? this.chatId,
+    hitTimeframes:          hitTimeframes          ?? List.from(this.hitTimeframes),
+    newTimeframes:          newTimeframes          ?? List.from(this.newTimeframes),
+    canReceiveManualAlerts: canReceiveManualAlerts ?? this.canReceiveManualAlerts,
   );
 
   Map<String, dynamic> toJson() => {
     'id': id, 'name': name, 'token': token, 'chatId': chatId,
     'hitTimeframes': hitTimeframes, 'newTimeframes': newTimeframes,
+    'canReceiveManualAlerts': canReceiveManualAlerts,
   };
 
   factory TelegramBot.fromJson(Map<String, dynamic> j) {
@@ -69,6 +76,7 @@ class TelegramBot {
       chatId:        j['chatId'] as String? ?? '',
       hitTimeframes: parseTfList(j['hitTimeframes'], j['alertOnHit'] as bool? ?? true),
       newTimeframes: parseTfList(j['newTimeframes'], j['alertOnNew'] as bool? ?? false),
+      canReceiveManualAlerts: j['canReceiveManualAlerts'] as bool? ?? false,
     );
   }
 
@@ -85,6 +93,7 @@ class PriceAlert {
 
   /// 'above' → alert when current price >= targetPrice
   /// 'below' → alert when current price <= targetPrice
+  /// 'touch' → alert when current price is within 0.2% of targetPrice (either side)
   String condition;
 
   /// Which TelegramBot to use
@@ -111,10 +120,17 @@ class PriceAlert {
 
   bool get shouldFire => isActive && !isTriggered;
 
-  bool matches(double currentPrice) =>
-      condition == 'above'
-          ? currentPrice >= targetPrice
-          : currentPrice <= targetPrice;
+  bool matches(double currentPrice) {
+    switch (condition) {
+      case 'above': return currentPrice >= targetPrice;
+      case 'below': return currentPrice <= targetPrice;
+      case 'touch':
+        // Fire when price is within 0.2% of the target (from either side)
+        final pct = (currentPrice - targetPrice).abs() / targetPrice;
+        return pct <= 0.002;
+      default:      return false;
+    }
+  }
 
   PriceAlert copyWith({
     String? symbol, double? targetPrice, String? condition,

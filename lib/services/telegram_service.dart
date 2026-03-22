@@ -90,10 +90,27 @@ class TelegramService {
   }) async {
     if (!bot.isConfigured) return false;
 
-    final isAbove    = alert.condition == 'above';
-    final emoji      = isAbove ? '🚀' : '📉';
-    final dir        = isAbove ? 'crossed above' : 'crossed below';
-    final dispLabel  = alert.label.isNotEmpty
+    final String emoji;
+    final String signal;
+    switch (alert.condition) {
+      case 'above':
+        emoji  = '🚀';
+        signal = 'Price crossed above ${alert.targetPrice.toStringAsFixed(5)}';
+        break;
+      case 'below':
+        emoji  = '📉';
+        signal = 'Price crossed below ${alert.targetPrice.toStringAsFixed(5)}';
+        break;
+      case 'touch':
+        emoji  = '🎯';
+        signal = 'Price touched ${alert.targetPrice.toStringAsFixed(5)}';
+        break;
+      default:
+        emoji  = '🔔';
+        signal = 'Price reached ${alert.targetPrice.toStringAsFixed(5)}';
+    }
+
+    final dispLabel = alert.label.isNotEmpty
         ? alert.label
         : '${alert.symbol} Price Alert';
 
@@ -103,7 +120,7 @@ class TelegramService {
         '📊 <b>Symbol:</b>  ${alert.symbol}\n'
         '🎯 <b>Target:</b>  <code>${alert.targetPrice.toStringAsFixed(5)}</code>\n'
         '💰 <b>Current:</b> <code>${currentPrice.toStringAsFixed(5)}</code>\n'
-        '📌 <b>Signal:</b>  Price $dir ${alert.targetPrice.toStringAsFixed(5)}\n';
+        '📌 <b>Signal:</b>  $signal\n';
 
     return _sendToBot(bot, msg);
   }
