@@ -9,8 +9,8 @@ import '../config.dart';
 
 class AlertLog {
   final String symbol;
-  final String type;    // 'HH' or 'LL'
-  final String kind;    // 'hit' or 'new'
+  final String type; // 'HH' or 'LL'
+  final String kind; // 'hit' or 'new'
   final double price;
   final String timeframe;
   final DateTime time;
@@ -33,7 +33,7 @@ class HomeBody extends StatefulWidget {
 }
 
 class _HomeBodyState extends State<HomeBody> {
-  bool   _isRunning = false;
+  bool _isRunning = false;
   String _lastCheck = '—';
   final List<AlertLog> _alertLogs = [];
 
@@ -64,12 +64,12 @@ class _HomeBodyState extends State<HomeBody> {
           _alertLogs.insert(
             0,
             AlertLog(
-              symbol:    data['symbol']    as String,
-              type:      data['type']      as String,
-              kind:      data['kind']      as String? ?? 'hit',
-              price:     (data['price']    as num).toDouble(),
+              symbol: data['symbol'] as String,
+              type: data['type'] as String,
+              kind: data['kind'] as String? ?? 'hit',
+              price: (data['price'] as num).toDouble(),
               timeframe: data['timeframe'] as String,
-              time:      DateTime.parse(data['time'] as String),
+              time: DateTime.parse(data['time'] as String),
             ),
           );
         });
@@ -90,7 +90,8 @@ class _HomeBodyState extends State<HomeBody> {
 
   Future<void> _clearAlertedLevels() async {
     final prefs = await SharedPreferences.getInstance();
-    final keys  = prefs.getKeys()
+    final keys = prefs
+        .getKeys()
         .where((k) => k.startsWith('HH_') || k.startsWith('LL_'))
         .toList();
     for (final key in keys) {
@@ -117,19 +118,20 @@ class _HomeBodyState extends State<HomeBody> {
 
   @override
   Widget build(BuildContext context) {
-    final theme      = Theme.of(context);
-    final isDark     = theme.brightness == Brightness.dark;
-    final cardColor  = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
     final accentColor = _isRunning ? Colors.greenAccent : Colors.redAccent;
 
     // Summarize active bots
-    final hitBots = Config.bots.where((b) => b.alertOnHit && b.isConfigured).length;
-    final newBots = Config.bots.where((b) => b.alertOnNew && b.isConfigured).length;
+    final hitBots =
+        Config.bots.where((b) => b.alertOnHit && b.isConfigured).length;
+    final newBots =
+        Config.bots.where((b) => b.alertOnNew && b.isConfigured).length;
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-
         // ─── Status Card ──────────────────────────────
         _buildCard(
           cardColor: cardColor,
@@ -144,7 +146,9 @@ class _HomeBodyState extends State<HomeBody> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _isRunning ? '🟢 Bot is Running' : '🔴 Bot is Stopped',
+                          _isRunning
+                              ? '🟢 Bot is Running'
+                              : '🔴 Bot is Stopped',
                           style: theme.textTheme.titleMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                             color: accentColor,
@@ -158,7 +162,7 @@ class _HomeBodyState extends State<HomeBody> {
                         Text(
                           'Every ${Config.checkEveryMinutes} min · '
                           '${Config.symbols.length} pairs · '
-                          '${Config.timeframes.join(', ')}',
+                          '${Config.effectiveTimeframes.join(', ')}',
                           style: theme.textTheme.bodySmall,
                         ),
                         const SizedBox(height: 4),
@@ -167,14 +171,17 @@ class _HomeBodyState extends State<HomeBody> {
                           children: [
                             if (hitBots > 0)
                               _BadgeChip(
-                                label: '$hitBots hit bot${hitBots > 1 ? 's' : ''}',
+                                label:
+                                    '$hitBots hit bot${hitBots > 1 ? 's' : ''}',
                                 color: Colors.orange,
                                 isDark: isDark,
                               ),
-                            if (hitBots > 0 && newBots > 0) const SizedBox(width: 6),
+                            if (hitBots > 0 && newBots > 0)
+                              const SizedBox(width: 6),
                             if (newBots > 0)
                               _BadgeChip(
-                                label: '$newBots new-level bot${newBots > 1 ? 's' : ''}',
+                                label:
+                                    '$newBots new-level bot${newBots > 1 ? 's' : ''}',
                                 color: Colors.purple,
                                 isDark: isDark,
                               ),
@@ -233,9 +240,8 @@ class _HomeBodyState extends State<HomeBody> {
                 children: Config.symbols.map((s) {
                   return Chip(
                     label: Text(s, style: const TextStyle(fontSize: 12)),
-                    backgroundColor: isDark
-                        ? const Color(0xFF2A2A3E)
-                        : Colors.blue.shade50,
+                    backgroundColor:
+                        isDark ? const Color(0xFF2A2A3E) : Colors.blue.shade50,
                     side: BorderSide(
                       color: isDark
                           ? Colors.blueAccent.withOpacity(0.3)
@@ -302,8 +308,8 @@ class _HomeBodyState extends State<HomeBody> {
   }
 
   Widget _buildAlertTile(AlertLog log, bool isDark) {
-    final isHH    = log.type == 'HH';
-    final isNew   = log.kind == 'new';
+    final isHH = log.type == 'HH';
+    final isNew = log.kind == 'new';
 
     // Colors: orange tint for "new level", red/green for "hit"
     final Color color;
@@ -312,14 +318,15 @@ class _HomeBodyState extends State<HomeBody> {
     final String subtitle;
 
     if (isNew) {
-      color    = isHH ? Colors.orange.shade400 : Colors.purple.shade300;
-      emoji    = isHH ? '📈' : '📉';
-      title    = '$emoji ${log.symbol} · New ${isHH ? "HH" : "LL"} · ${log.timeframe}';
+      color = isHH ? Colors.orange.shade400 : Colors.purple.shade300;
+      emoji = isHH ? '📈' : '📉';
+      title =
+          '$emoji ${log.symbol} · New ${isHH ? "HH" : "LL"} · ${log.timeframe}';
       subtitle = isHH ? 'New Higher High Formed' : 'New Lower Low Formed';
     } else {
-      color    = isHH ? Colors.redAccent : Colors.greenAccent;
-      emoji    = isHH ? '🔴' : '🟢';
-      title    = '$emoji ${log.symbol} · ${log.type} Hit · ${log.timeframe}';
+      color = isHH ? Colors.redAccent : Colors.greenAccent;
+      emoji = isHH ? '🔴' : '🟢';
+      title = '$emoji ${log.symbol} · ${log.type} Hit · ${log.timeframe}';
       subtitle = isHH ? 'Resistance Hit' : 'Support Hit';
     }
 
@@ -340,8 +347,7 @@ class _HomeBodyState extends State<HomeBody> {
               Text(title,
                   style: const TextStyle(
                       fontWeight: FontWeight.bold, fontSize: 13)),
-              Text(subtitle,
-                  style: TextStyle(color: color, fontSize: 12)),
+              Text(subtitle, style: TextStyle(color: color, fontSize: 12)),
             ],
           ),
           Column(
@@ -386,9 +392,10 @@ class _HomeBodyState extends State<HomeBody> {
 // ─── Small badge chip ─────────────────────────────────────
 class _BadgeChip extends StatelessWidget {
   final String label;
-  final Color  color;
-  final bool   isDark;
-  const _BadgeChip({required this.label, required this.color, required this.isDark});
+  final Color color;
+  final bool isDark;
+  const _BadgeChip(
+      {required this.label, required this.color, required this.isDark});
 
   @override
   Widget build(BuildContext context) {
@@ -401,7 +408,8 @@ class _BadgeChip extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w600),
+        style:
+            TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w600),
       ),
     );
   }

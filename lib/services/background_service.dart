@@ -1,8 +1,7 @@
 // ─── services/background_service.dart ───────────────────
-// Runs the bot logic in the background even when app is closed.
-// Supports two alert types:
-//   1. HIT  — price touches an existing HH/LL level
-//   2. NEW  — a brand-new HH/LL pivot is formed
+// Background bot. Monitors the UNION of all bot timeframes
+// (Config.effectiveTimeframes). Each alert is routed only to
+// bots that have subscribed to that specific timeframe.
 
 import 'dart:async';
 import 'dart:convert';
@@ -15,7 +14,7 @@ import 'binance_service.dart';
 import 'pivot_service.dart';
 import 'telegram_service.dart';
 
-// ─── Top-level state (isolate-local) ─────────────────────
+// ─── Top-level isolate-local state ───────────────────────
 Timer? _checkTimer;
 bool   _isBusy     = false;
 bool   _shouldStop = false;
@@ -41,12 +40,12 @@ Future<void> initBackgroundService() async {
 
   await service.configure(
     androidConfiguration: AndroidConfiguration(
-      onStart:                     onBackgroundStart,
-      autoStart:                   false,
-      isForegroundMode:            true,
-      notificationChannelId:       'hh_ll_bot_channel',
-      initialNotificationTitle:    'HH/LL Bot',
-      initialNotificationContent:  'Bot is running...',
+      onStart:                         onBackgroundStart,
+      autoStart:                       false,
+      isForegroundMode:                true,
+      notificationChannelId:           'hh_ll_bot_channel',
+      initialNotificationTitle:        'HH/LL Bot',
+      initialNotificationContent:      'Bot is running...',
       foregroundServiceNotificationId: 888,
     ),
     iosConfiguration: IosConfiguration(
@@ -57,31 +56,32 @@ Future<void> initBackgroundService() async {
   );
 }
 
-// ─── iOS BACKGROUND HANDLER ──────────────────────────────
 @pragma('vm:entry-point')
 Future<bool> onIosBackground(ServiceInstance service) async {
   WidgetsFlutterBinding.ensureInitialized();
   return true;
 }
 
-// ─── MAIN BACKGROUND LOOP ────────────────────────────────
+// ─── MAIN BACKGROUND ENTRY POINT ─────────────────────────
 @pragma('vm:entry-point')
 void onBackgroundStart(ServiceInstance service) async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Reset state from any previous run
   _shouldStop = false;
   _isBusy     = false;
   _checkTimer?.cancel();
   _checkTimer = null;
 
   print('🚀 Background service started');
-
   await ConfigService.load();
-  print('✅ Config loaded: ${Config.symbols} | ${Config.timeframes} | '
-      'every ${Config.checkEveryMinutes}m | ${Config.bots.length} bot(s)');
 
-  // ─── Stop command ─────────────────────────────────────
+  final tfs = Config.effectiveTimeframes;
+  print('✅ Config loaded — symbols: ${Config.symbols} | '
+      'effective timeframes: $tfs | '
+      'every ${Config.checkEveryMinutes}m | '
+      '${Config.bots.length} bot(s)');
+
+  // ─── Stop ─────────────────────────────────────────────
   service.on('stop').listen((event) {
     print('🛑 Stop command received');
     _shouldStop = true;
@@ -90,10 +90,9 @@ void onBackgroundStart(ServiceInstance service) async {
     service.stopSelf();
   });
 
-  // ─── Live config update from main isolate ─────────────
+  // ─── Live config push from main isolate ───────────────
   service.on('updateConfig').listen((data) {
     if (data == null) return;
-
     if (data['bots'] != null) {
       try {
         final list = data['bots'] as List;
@@ -105,10 +104,9 @@ void onBackgroundStart(ServiceInstance service) async {
         print('⚠️ Failed to parse bots update: $e');
       }
     }
-    if (data['symbols']  != null) Config.symbols   = List<String>.from(data['symbols'] as List);
-    if (data['timeframes'] != null) Config.timeframes = List<String>.from(data['timeframes'] as List);
-    if (data['pivotLen'] != null) Config.pivotLen  = data['pivotLen'] as int;
-    if (data['limit']    != null) Config.limit     = data['limit']    as int;
+    if (data['symbols']  != null) Config.symbols   = List<String>.from(data['symbols']  as List);
+    if (data['pivotLen'] != null) Config.pivotLen   = data['pivotLen'] as int;
+    if (data['limit']    != null) Config.limit      = data['limit']    as int;
 
     if (data['checkEveryMinutes'] != null) {
       final newInterval = data['checkEveryMinutes'] as int;
@@ -119,29 +117,21 @@ void onBackgroundStart(ServiceInstance service) async {
         _restartTimer(service);
       }
     }
-
-    print('🔄 Config updated: symbols=${Config.symbols}, '
-        'interval=${Config.checkEveryMinutes}m, '
-        '${Config.bots.length} bot(s)');
+    print('🔄 Config updated: ${Config.bots.length} bot(s), '
+        'effective TFs: ${Config.effectiveTimeframes}');
   });
 
-  // Run one check immediately on start
   await _runAllChecks(service);
-
-  // Start the repeating timer
   _restartTimer(service);
 }
 
-// ─── Start/restart the periodic timer ────────────────────
+// ─── Timer ───────────────────────────────────────────────
 void _restartTimer(ServiceInstance service) {
   _checkTimer?.cancel();
   _checkTimer = Timer.periodic(
     Duration(minutes: Config.checkEveryMinutes),
     (timer) async {
-      if (_shouldStop) {
-        timer.cancel();
-        return;
-      }
+      if (_shouldStop) { timer.cancel(); return; }
       if (_isBusy) {
         print('⏳ Previous check still running — skipping tick');
         return;
@@ -150,10 +140,10 @@ void _restartTimer(ServiceInstance service) {
       await _runAllChecks(service);
     },
   );
-  print('⏱ Timer started — fires every ${Config.checkEveryMinutes} minute(s)');
+  print('⏱ Timer started — every ${Config.checkEveryMinutes}m');
 }
 
-// ─── CHECK ALL SYMBOLS & TIMEFRAMES ──────────────────────
+// ─── Run all checks ──────────────────────────────────────
 Future<void> _runAllChecks(ServiceInstance service) async {
   if (_isBusy) return;
   _isBusy = true;
@@ -161,25 +151,34 @@ Future<void> _runAllChecks(ServiceInstance service) async {
   try {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
-    final now = DateTime.now();
 
+    // Compute the effective timeframes NOW so it reflects
+    // any config changes since the last tick.
+    final timeframes = Config.effectiveTimeframes;
+
+    if (timeframes.isEmpty) {
+      print('⚠️ No timeframes configured across any bot — skipping check');
+      _isBusy = false;
+      return;
+    }
+
+    final now     = DateTime.now();
     final timeStr =
         '${now.hour.toString().padLeft(2, '0')}:'
         '${now.minute.toString().padLeft(2, '0')}';
 
-    print('🔍 Checking ${Config.symbols} on ${Config.timeframes} at $timeStr');
+    print('🔍 Checking ${Config.symbols} on $timeframes at $timeStr');
 
     if (service is AndroidServiceInstance) {
       service.setForegroundNotificationInfo(
         title:   'HH/LL Bot — Last check: $timeStr',
-        content: '${Config.symbols.length} pairs · ${Config.timeframes.join(', ')}',
+        content: '${Config.symbols.length} pair(s) · ${timeframes.join(', ')}',
       );
     }
-
     service.invoke('update', {'lastCheck': timeStr});
 
     for (final symbol in Config.symbols) {
-      for (final timeframe in Config.timeframes) {
+      for (final timeframe in timeframes) {
         if (_shouldStop) return;
         await _checkTimeframe(symbol, timeframe, prefs, service);
       }
@@ -191,7 +190,7 @@ Future<void> _runAllChecks(ServiceInstance service) async {
   }
 }
 
-// ─── CHECK ONE SYMBOL + TIMEFRAME ────────────────────────
+// ─── Check one symbol + timeframe ────────────────────────
 Future<void> _checkTimeframe(
   String symbol,
   String timeframe,
@@ -206,13 +205,12 @@ Future<void> _checkTimeframe(
     final lastClosed = candles[candles.length - 2];
     final liveCandle = candles[candles.length - 1];
 
-    // ──────────────────────────────────────────────────
-    // ALERT TYPE 1 — HIT: Price touches existing HH/LL
-    // ──────────────────────────────────────────────────
+    // ── ALERT TYPE 1: HIT ────────────────────────────────
+    // Only fires for bots that have this timeframe in hitTimeframes.
 
-    // HH Hit
     if (result.hh != null) {
-      final hitKey = 'HH_HIT_${symbol}_${timeframe}_${result.hh!.toStringAsFixed(5)}';
+      final hitKey = 'HH_HIT_${symbol}_${timeframe}_'
+          '${result.hh!.toStringAsFixed(5)}';
       final alreadyAlerted = prefs.getBool(hitKey) ?? false;
       final isHit = PivotService.isHit(lastClosed, result.hh!, true) ||
                     PivotService.isHit(liveCandle,  result.hh!, true);
@@ -237,14 +235,14 @@ Future<void> _checkTimeframe(
           });
           print('✅ HIT $symbol HH @ ${result.hh} ($timeframe)');
         } else {
-          print('❌ Telegram failed — HIT $symbol HH');
+          print('❌ Telegram failed — HIT $symbol HH ($timeframe)');
         }
       }
     }
 
-    // LL Hit
     if (result.ll != null) {
-      final hitKey = 'LL_HIT_${symbol}_${timeframe}_${result.ll!.toStringAsFixed(5)}';
+      final hitKey = 'LL_HIT_${symbol}_${timeframe}_'
+          '${result.ll!.toStringAsFixed(5)}';
       final alreadyAlerted = prefs.getBool(hitKey) ?? false;
       final isHit = PivotService.isHit(lastClosed, result.ll!, false) ||
                     PivotService.isHit(liveCandle,  result.ll!, false);
@@ -269,21 +267,18 @@ Future<void> _checkTimeframe(
           });
           print('✅ HIT $symbol LL @ ${result.ll} ($timeframe)');
         } else {
-          print('❌ Telegram failed — HIT $symbol LL');
+          print('❌ Telegram failed — HIT $symbol LL ($timeframe)');
         }
       }
     }
 
-    // ──────────────────────────────────────────────────
-    // ALERT TYPE 2 — NEW: A new HH/LL pivot was formed
-    // Uses a separate dedup key (HH_NEW_ / LL_NEW_) so
-    // it fires once per newly detected level regardless
-    // of whether price has touched it.
-    // ──────────────────────────────────────────────────
+    // ── ALERT TYPE 2: NEW LEVEL ───────────────────────────
+    // Only fires for bots that have this timeframe in newTimeframes.
+    // Dedup key uses HH_NEW_ / LL_NEW_ prefix so it's independent.
 
-    // New HH
     if (result.hh != null) {
-      final newKey = 'HH_NEW_${symbol}_${timeframe}_${result.hh!.toStringAsFixed(5)}';
+      final newKey = 'HH_NEW_${symbol}_${timeframe}_'
+          '${result.hh!.toStringAsFixed(5)}';
       final alreadyAlerted = prefs.getBool(newKey) ?? false;
 
       if (!alreadyAlerted) {
@@ -293,10 +288,8 @@ Future<void> _checkTimeframe(
           timeframe:  timeframe,
           symbol:     symbol,
         );
-        // Always mark seen (even if no bots enabled) to prevent
-        // repeated checks on the same level value.
+        // Always mark seen so we don't spam on same level value.
         await prefs.setBool(newKey, true);
-
         if (ok) {
           service.invoke('alert', {
             'symbol':    symbol,
@@ -311,9 +304,9 @@ Future<void> _checkTimeframe(
       }
     }
 
-    // New LL
     if (result.ll != null) {
-      final newKey = 'LL_NEW_${symbol}_${timeframe}_${result.ll!.toStringAsFixed(5)}';
+      final newKey = 'LL_NEW_${symbol}_${timeframe}_'
+          '${result.ll!.toStringAsFixed(5)}';
       final alreadyAlerted = prefs.getBool(newKey) ?? false;
 
       if (!alreadyAlerted) {
@@ -324,7 +317,6 @@ Future<void> _checkTimeframe(
           symbol:     symbol,
         );
         await prefs.setBool(newKey, true);
-
         if (ok) {
           service.invoke('alert', {
             'symbol':    symbol,

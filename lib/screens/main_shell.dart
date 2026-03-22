@@ -1,7 +1,7 @@
 // ─── screens/main_shell.dart ─────────────────────────────
-// Root widget. 5-tab BottomNavigationBar (Home, Pairs,
-// Timeframes, Indicator, Bot). Telegram bots accessible via
-// the top-right send icon in the AppBar.
+// Root widget. 4-tab bottom nav: Home, Pairs, Indicator, Bot.
+// Timeframes are now configured per-bot in the Telegram Bots
+// sheet (top-right icon), so the old Timeframes tab is removed.
 
 import 'package:flutter/material.dart';
 import 'home_screen.dart';
@@ -18,17 +18,15 @@ class _MainShellState extends State<MainShell> {
   int _index = 0;
 
   static const _tabs = [
-    _TabItem(label: 'Home',       icon: Icons.home_rounded),
-    _TabItem(label: 'Pairs',      icon: Icons.currency_bitcoin),
-    _TabItem(label: 'Timeframes', icon: Icons.access_time_rounded),
-    _TabItem(label: 'Indicator',  icon: Icons.tune_rounded),
-    _TabItem(label: 'Bot',        icon: Icons.settings_rounded),
+    _TabItem(label: 'Home',      icon: Icons.home_rounded),
+    _TabItem(label: 'Pairs',     icon: Icons.currency_bitcoin),
+    _TabItem(label: 'Indicator', icon: Icons.tune_rounded),
+    _TabItem(label: 'Bot',       icon: Icons.settings_rounded),
   ];
 
   static const _titles = [
     'HH/LL Alert Bot',
     'Trading Pairs',
-    'Timeframes',
     'Indicator Settings',
     'Bot Settings',
   ];
@@ -50,7 +48,6 @@ class _MainShellState extends State<MainShell> {
     );
   }
 
-  // ─── Open Telegram Bots as a modal bottom sheet ───────
   void _openTelegramBots() {
     showModalBottomSheet(
       context: context,
@@ -67,7 +64,6 @@ class _MainShellState extends State<MainShell> {
     final pages = [
       const HomeBody(),
       TradingPairsSettingsPage(onSaved: _onSaved),
-      TimeframesSettingsPage(onSaved: _onSaved),
       IndicatorSettingsPage(onSaved: _onSaved),
       BotSettingsPage(onSaved: _onSaved),
     ];
@@ -84,10 +80,7 @@ class _MainShellState extends State<MainShell> {
           ),
         ],
       ),
-      body: IndexedStack(
-        index: _index,
-        children: pages,
-      ),
+      body: IndexedStack(index: _index, children: pages),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _index,
         onTap: (i) => setState(() => _index = i),
@@ -126,11 +119,11 @@ class _TelegramBotsSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark      = Theme.of(context).brightness == Brightness.dark;
-    final sheetColor  = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+    final isDark     = Theme.of(context).brightness == Brightness.dark;
+    final sheetColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.9,
+      initialChildSize: 0.92,
       minChildSize:     0.5,
       maxChildSize:     0.97,
       builder: (_, controller) => Container(
@@ -142,39 +135,30 @@ class _TelegramBotsSheet extends StatelessWidget {
         child: Column(
           children: [
             const SizedBox(height: 12),
-            // Drag handle
             Container(
               width: 40, height: 4,
               decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.grey.shade700
-                    : Colors.grey.shade300,
+                color: isDark ? Colors.grey.shade700 : Colors.grey.shade300,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
-            // Header
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 8, 0),
-              child: Row(
-                children: [
-                  const Icon(Icons.smart_toy_rounded,
-                      color: Colors.blueAccent, size: 22),
-                  const SizedBox(width: 10),
-                  const Text(
-                    'Telegram Bots',
+              child: Row(children: [
+                const Icon(Icons.smart_toy_rounded,
+                    color: Colors.blueAccent, size: 22),
+                const SizedBox(width: 10),
+                const Text('Telegram Bots',
                     style: TextStyle(
-                        fontSize: 17, fontWeight: FontWeight.bold),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
+                        fontSize: 17, fontWeight: FontWeight.bold)),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ]),
             ),
             const Divider(height: 1),
-            // Page content
             Expanded(
               child: SingleChildScrollView(
                 controller: controller,

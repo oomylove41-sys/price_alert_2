@@ -1,10 +1,17 @@
 // ─── config.dart ────────────────────────────────────────
 // Runtime-editable config. Supports multiple Telegram bots
-// with configurable alert types per bot.
+// with per-bot, per-alert-type timeframe selection.
 
 import 'dart:convert';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+// ─── All standard Binance timeframes (canonical order) ───
+const List<String> kAllTimeframes = [
+  '1m','3m','5m','15m','30m',
+  '1h','2h','4h','6h','8h','12h',
+  '1d','3d','1w','1M',
+];
 
 // ══════════════════════════════════════════════════════════
 // ─── TELEGRAM BOT MODEL ──────────────────────────────────
@@ -14,61 +21,82 @@ class TelegramBot {
   String name;
   String token;
   String chatId;
-  bool alertOnHit;   // alert when price HITS an existing HH/LL level
-  bool alertOnNew;   // alert when a NEW HH/LL is created
+
+  /// Timeframes this bot receives HIT alerts for.
+  /// Empty = hit alerts off.
+  List<String> hitTimeframes;
+
+  /// Timeframes this bot receives NEW LEVEL alerts for.
+  /// Empty = new level alerts off.
+  List<String> newTimeframes;
 
   TelegramBot({
     required this.id,
     required this.name,
     required this.token,
     required this.chatId,
-    this.alertOnHit = true,
-    this.alertOnNew = false,
-  });
+    List<String>? hitTimeframes,
+    List<String>? newTimeframes,
+  })  : hitTimeframes = hitTimeframes ?? [],
+        newTimeframes = newTimeframes ?? [];
 
-  TelegramBot copyWith({
-    String? name,
-    String? token,
-    String? chatId,
-    bool? alertOnHit,
-    bool? alertOnNew,
-  }) {
-    return TelegramBot(
-      id: id,
-      name: name ?? this.name,
-      token: token ?? this.token,
-      chatId: chatId ?? this.chatId,
-      alertOnHit: alertOnHit ?? this.alertOnHit,
-      alertOnNew: alertOnNew ?? this.alertOnNew,
-    );
-  }
-
-  Map<String, dynamic> toJson() => {
-    'id': id,
-    'name': name,
-    'token': token,
-    'chatId': chatId,
-    'alertOnHit': alertOnHit,
-    'alertOnNew': alertOnNew,
-  };
-
-  factory TelegramBot.fromJson(Map<String, dynamic> j) => TelegramBot(
-    id:         j['id']         as String? ?? _genId(),
-    name:       j['name']       as String? ?? 'Bot',
-    token:      j['token']      as String? ?? '',
-    chatId:     j['chatId']     as String? ?? '',
-    alertOnHit: j['alertOnHit'] as bool?   ?? true,
-    alertOnNew: j['alertOnNew'] as bool?   ?? false,
-  );
-
-  static String _genId() =>
-      DateTime.now().millisecondsSinceEpoch.toString();
+  // ─── Derived helpers ──────────────────────────────────
+  bool get alertOnHit => hitTimeframes.isNotEmpty;
+  bool get alertOnNew => newTimeframes.isNotEmpty;
 
   bool get isConfigured =>
       token.isNotEmpty &&
       token != 'YOUR_TELEGRAM_BOT_TOKEN' &&
       chatId.isNotEmpty &&
       chatId != 'YOUR_TELEGRAM_CHAT_ID';
+
+  TelegramBot copyWith({
+    String? name,
+    String? token,
+    String? chatId,
+    List<String>? hitTimeframes,
+    List<String>? newTimeframes,
+  }) {
+    return TelegramBot(
+      id:            id,
+      name:          name          ?? this.name,
+      token:         token         ?? this.token,
+      chatId:        chatId        ?? this.chatId,
+      hitTimeframes: hitTimeframes ?? List.from(this.hitTimeframes),
+      newTimeframes: newTimeframes ?? List.from(this.newTimeframes),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id':            id,
+    'name':          name,
+    'token':         token,
+    'chatId':        chatId,
+    'hitTimeframes': hitTimeframes,
+    'newTimeframes': newTimeframes,
+  };
+
+  factory TelegramBot.fromJson(Map<String, dynamic> j) {
+    // Migrate from old boolean-only format
+    List<String> parseTfList(dynamic raw, bool fallbackEnabled) {
+      if (raw is List) return List<String>.from(raw);
+      return fallbackEnabled ? ['30m', '1h'] : [];
+    }
+    final hitEnabled = j['alertOnHit'] as bool? ?? true;
+    final newEnabled = j['alertOnNew'] as bool? ?? false;
+
+    return TelegramBot(
+      id:            j['id']    as String? ?? _genId(),
+      name:          j['name']  as String? ?? 'Bot',
+      token:         j['token'] as String? ?? '',
+      chatId:        j['chatId'] as String? ?? '',
+      hitTimeframes: parseTfList(j['hitTimeframes'], hitEnabled),
+      newTimeframes: parseTfList(j['newTimeframes'], newEnabled),
+    );
+  }
+
+  static String _genId() =>
+      DateTime.now().millisecondsSinceEpoch.toString();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -86,37 +114,44 @@ class Config {
     'XRPUSDT',
   ];
 
-  // ─── TIMEFRAMES ───────────────────────────────────────
-  static List<String> timeframes = ['30m', '1h'];
-
   // ─── INDICATOR SETTINGS ───────────────────────────────
   static int pivotLen = 5;
   static int limit    = 1000;
 
   // ─── BOT SETTINGS ─────────────────────────────────────
   static int checkEveryMinutes = 5;
+
+  // ─── Effective timeframes ─────────────────────────────
+  // Union of every timeframe referenced across all bots.
+  // The background service only fetches candles for these.
+  static List<String> get effectiveTimeframes {
+    final Set<String> all = {};
+    for (final bot in bots) {
+      all.addAll(bot.hitTimeframes);
+      all.addAll(bot.newTimeframes);
+    }
+    // Return in canonical Binance order
+    return kAllTimeframes.where(all.contains).toList();
+  }
 }
 
 TelegramBot _defaultBot() => TelegramBot(
-  id:         'default',
-  name:       'Main Bot',
-  token:      'YOUR_TELEGRAM_BOT_TOKEN',
-  chatId:     'YOUR_TELEGRAM_CHAT_ID',
-  alertOnHit: true,
-  alertOnNew: false,
+  id:            'default',
+  name:          'Main Bot',
+  token:         'YOUR_TELEGRAM_BOT_TOKEN',
+  chatId:        'YOUR_TELEGRAM_CHAT_ID',
+  hitTimeframes: ['30m', '1h'],
+  newTimeframes: [],
 );
 
 // ══════════════════════════════════════════════════════════
-// ─── CONFIG SERVICE ──────────────────────────────────────
+// ─── CONFIG SERVICE ──────────────════════════════════════
 // ══════════════════════════════════════════════════════════
 class ConfigService {
-  static const _kBotsV2   = 'cfg_bots_v2';
-  // Legacy single-bot keys (used for migration)
-  static const _kBotToken = 'cfg_bot_token';
-  static const _kChatId   = 'cfg_chat_id';
-
+  static const _kBotsV2    = 'cfg_bots_v2';
+  static const _kBotToken  = 'cfg_bot_token'; // legacy migration
+  static const _kChatId    = 'cfg_chat_id';   // legacy migration
   static const _kSymbols   = 'cfg_symbols';
-  static const _kTimeframes = 'cfg_timeframes';
   static const _kPivotLen  = 'cfg_pivot_len';
   static const _kLimit     = 'cfg_limit';
   static const _kCheckEvery = 'cfg_check_every';
@@ -126,14 +161,12 @@ class ConfigService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
 
-    // Load bots (with v1 → v2 migration)
     final botsStr = prefs.getString(_kBotsV2);
     if (botsStr != null && botsStr.isNotEmpty) {
       try {
         final list = jsonDecode(botsStr) as List;
         final bots = list
-            .map((j) => TelegramBot.fromJson(
-                Map<String, dynamic>.from(j as Map)))
+            .map((j) => TelegramBot.fromJson(Map<String, dynamic>.from(j as Map)))
             .toList();
         Config.bots = bots.isNotEmpty ? bots : [_defaultBot()];
       } catch (_) {
@@ -146,61 +179,51 @@ class ConfigService {
       if (oldToken != null && oldToken.isNotEmpty) {
         Config.bots = [
           TelegramBot(
-            id:         'migrated',
-            name:       'Main Bot',
-            token:      oldToken,
-            chatId:     oldChatId ?? '',
-            alertOnHit: true,
-            alertOnNew: false,
+            id:            'migrated',
+            name:          'Main Bot',
+            token:         oldToken,
+            chatId:        oldChatId ?? '',
+            hitTimeframes: ['30m', '1h'],
+            newTimeframes: [],
           ),
         ];
-        // Persist in new format
         await _persistBots(prefs);
       }
     }
 
-    Config.symbols          = prefs.getStringList(_kSymbols)    ?? Config.symbols;
-    Config.timeframes       = prefs.getStringList(_kTimeframes) ?? Config.timeframes;
-    Config.pivotLen         = prefs.getInt(_kPivotLen)          ?? Config.pivotLen;
-    Config.limit            = prefs.getInt(_kLimit)             ?? Config.limit;
-    Config.checkEveryMinutes = prefs.getInt(_kCheckEvery)       ?? Config.checkEveryMinutes;
+    Config.symbols           = prefs.getStringList(_kSymbols) ?? Config.symbols;
+    Config.pivotLen          = prefs.getInt(_kPivotLen)       ?? Config.pivotLen;
+    Config.limit             = prefs.getInt(_kLimit)          ?? Config.limit;
+    Config.checkEveryMinutes = prefs.getInt(_kCheckEvery)     ?? Config.checkEveryMinutes;
   }
 
-  // ─── Push live config update to background isolate ────
+  // ─── Push live config to background isolate ───────────
   static Future<void> _pushToBackground() async {
     final svc = FlutterBackgroundService();
     if (!await svc.isRunning()) return;
-
     svc.invoke('updateConfig', {
       'bots':              Config.bots.map((b) => b.toJson()).toList(),
       'symbols':           Config.symbols,
-      'timeframes':        Config.timeframes,
       'pivotLen':          Config.pivotLen,
       'limit':             Config.limit,
       'checkEveryMinutes': Config.checkEveryMinutes,
     });
   }
 
-  // ─── Persist bots to SharedPreferences ────────────────
   static Future<void> _persistBots(SharedPreferences prefs) async {
-    final json = jsonEncode(Config.bots.map((b) => b.toJson()).toList());
-    await prefs.setString(_kBotsV2, json);
+    await prefs.setString(
+        _kBotsV2, jsonEncode(Config.bots.map((b) => b.toJson()).toList()));
   }
 
-  // ─── Clear all HH_* / LL_* dedup keys ────────────────
-  // Covers both hit keys (HH_...) and new-level keys (HH_NEW_...)
   static Future<void> _clearAllDedupKeys() async {
     final prefs = await SharedPreferences.getInstance();
     final stale = prefs.getKeys()
         .where((k) => k.startsWith('HH_') || k.startsWith('LL_'))
         .toList();
-    for (final k in stale) {
-      await prefs.remove(k);
-    }
+    for (final k in stale) await prefs.remove(k);
     print('🧹 Cleared ${stale.length} dedup keys');
   }
 
-  // ─── Save bots ────────────────────────────────────────
   static Future<void> saveBots(List<TelegramBot> bots) async {
     final prefs = await SharedPreferences.getInstance();
     Config.bots = List.from(bots);
@@ -208,21 +231,6 @@ class ConfigService {
     await _pushToBackground();
   }
 
-  // ─── Save Telegram (legacy single-bot shim) ───────────
-  static Future<void> saveTelegram({
-    required String botToken,
-    required String chatId,
-  }) async {
-    if (Config.bots.isNotEmpty) {
-      Config.bots[0] = Config.bots[0].copyWith(
-        token: botToken,
-        chatId: chatId,
-      );
-    }
-    await saveBots(Config.bots);
-  }
-
-  // ─── Save Trading Pairs ───────────────────────────────
   static Future<void> saveSymbols(List<String> newSymbols) async {
     final prefs = await SharedPreferences.getInstance();
     await _clearAllDedupKeys();
@@ -231,16 +239,6 @@ class ConfigService {
     await _pushToBackground();
   }
 
-  // ─── Save Timeframes ──────────────────────────────────
-  static Future<void> saveTimeframes(List<String> timeframes) async {
-    final prefs = await SharedPreferences.getInstance();
-    await _clearAllDedupKeys();
-    await prefs.setStringList(_kTimeframes, timeframes);
-    Config.timeframes = timeframes;
-    await _pushToBackground();
-  }
-
-  // ─── Save Indicator Settings ──────────────────────────
   static Future<void> saveIndicator({
     required int pivotLen,
     required int limit,
@@ -253,7 +251,6 @@ class ConfigService {
     await _pushToBackground();
   }
 
-  // ─── Save Bot Settings ────────────────────────────────
   static Future<void> saveBotSettings({required int checkEveryMinutes}) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_kCheckEvery, checkEveryMinutes);
