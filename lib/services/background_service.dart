@@ -1,7 +1,8 @@
 // ─── services/background_service.dart ───────────────────
-// Background bot. Monitors the UNION of all bot timeframes
-// (Config.effectiveTimeframes). Each alert is routed only to
-// bots that have subscribed to that specific timeframe.
+// Background bot. Three alert types run each tick:
+//   1. HIT  — price touches an existing HH/LL level
+//   2. NEW  — a fresh HH/LL pivot is formed
+//   3. PRICE ALERT — price crosses a manually set level
 
 import 'dart:async';
 import 'dart:convert';
@@ -14,26 +15,22 @@ import 'binance_service.dart';
 import 'pivot_service.dart';
 import 'telegram_service.dart';
 
-// ─── Top-level isolate-local state ───────────────────────
 Timer? _checkTimer;
 bool   _isBusy     = false;
 bool   _shouldStop = false;
 
-// ─── INIT BACKGROUND SERVICE ─────────────────────────────
+// ─── Init ─────────────────────────────────────────────────
 Future<void> initBackgroundService() async {
   final service = FlutterBackgroundService();
 
   const AndroidNotificationChannel channel = AndroidNotificationChannel(
-    'hh_ll_bot_channel',
-    'HH/LL Bot',
+    'hh_ll_bot_channel', 'HH/LL Bot',
     description: 'Running HH/LL Alert Bot',
     importance: Importance.low,
   );
 
-  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-      FlutterLocalNotificationsPlugin();
-
-  await flutterLocalNotificationsPlugin
+  final FlutterLocalNotificationsPlugin plugin = FlutterLocalNotificationsPlugin();
+  await plugin
       .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>()
       ?.createNotificationChannel(channel);
@@ -62,7 +59,7 @@ Future<bool> onIosBackground(ServiceInstance service) async {
   return true;
 }
 
-// ─── MAIN BACKGROUND ENTRY POINT ─────────────────────────
+// ─── Background entry point ───────────────────────────────
 @pragma('vm:entry-point')
 void onBackgroundStart(ServiceInstance service) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -75,13 +72,13 @@ void onBackgroundStart(ServiceInstance service) async {
   print('🚀 Background service started');
   await ConfigService.load();
 
-  final tfs = Config.effectiveTimeframes;
-  print('✅ Config loaded — symbols: ${Config.symbols} | '
-      'effective timeframes: $tfs | '
+  print('✅ Config: ${Config.symbols} | '
+      'TFs: ${Config.effectiveTimeframes} | '
       'every ${Config.checkEveryMinutes}m | '
-      '${Config.bots.length} bot(s)');
+      '${Config.bots.length} bot(s) | '
+      '${Config.priceAlerts.length} price alert(s)');
 
-  // ─── Stop ─────────────────────────────────────────────
+  // ── Stop ────────────────────────────────────────────────
   service.on('stop').listen((event) {
     print('🛑 Stop command received');
     _shouldStop = true;
@@ -90,99 +87,92 @@ void onBackgroundStart(ServiceInstance service) async {
     service.stopSelf();
   });
 
-  // ─── Live config push from main isolate ───────────────
+  // ── Live config update ───────────────────────────────────
   service.on('updateConfig').listen((data) {
     if (data == null) return;
     if (data['bots'] != null) {
       try {
-        final list = data['bots'] as List;
-        Config.bots = list
+        Config.bots = (data['bots'] as List)
             .map((j) => TelegramBot.fromJson(
                 Map<String, dynamic>.from(j as Map)))
             .toList();
-      } catch (e) {
-        print('⚠️ Failed to parse bots update: $e');
-      }
+      } catch (e) { print('⚠️ Bots parse error: $e'); }
+    }
+    if (data['priceAlerts'] != null) {
+      try {
+        Config.priceAlerts = (data['priceAlerts'] as List)
+            .map((j) => PriceAlert.fromJson(
+                Map<String, dynamic>.from(j as Map)))
+            .toList();
+      } catch (e) { print('⚠️ PriceAlerts parse error: $e'); }
     }
     if (data['symbols']  != null) Config.symbols   = List<String>.from(data['symbols']  as List);
     if (data['pivotLen'] != null) Config.pivotLen   = data['pivotLen'] as int;
     if (data['limit']    != null) Config.limit      = data['limit']    as int;
-
     if (data['checkEveryMinutes'] != null) {
       final newInterval = data['checkEveryMinutes'] as int;
-      final changed = newInterval != Config.checkEveryMinutes;
-      Config.checkEveryMinutes = newInterval;
-      if (changed) {
-        print('⏱ Interval changed to ${Config.checkEveryMinutes}m — restarting timer');
+      if (newInterval != Config.checkEveryMinutes) {
+        Config.checkEveryMinutes = newInterval;
         _restartTimer(service);
       }
     }
-    print('🔄 Config updated: ${Config.bots.length} bot(s), '
-        'effective TFs: ${Config.effectiveTimeframes}');
+    print('🔄 Config updated | TFs: ${Config.effectiveTimeframes} | '
+        '${Config.priceAlerts.length} price alert(s)');
   });
 
   await _runAllChecks(service);
   _restartTimer(service);
 }
 
-// ─── Timer ───────────────────────────────────────────────
 void _restartTimer(ServiceInstance service) {
   _checkTimer?.cancel();
   _checkTimer = Timer.periodic(
     Duration(minutes: Config.checkEveryMinutes),
     (timer) async {
       if (_shouldStop) { timer.cancel(); return; }
-      if (_isBusy) {
-        print('⏳ Previous check still running — skipping tick');
-        return;
-      }
+      if (_isBusy) { print('⏳ Skipping tick — still busy'); return; }
       await ConfigService.load();
       await _runAllChecks(service);
     },
   );
-  print('⏱ Timer started — every ${Config.checkEveryMinutes}m');
+  print('⏱ Timer: every ${Config.checkEveryMinutes}m');
 }
 
-// ─── Run all checks ──────────────────────────────────────
+// ─── Master check loop ────────────────────────────────────
 Future<void> _runAllChecks(ServiceInstance service) async {
   if (_isBusy) return;
   _isBusy = true;
 
   try {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs      = await SharedPreferences.getInstance();
     await prefs.reload();
-
-    // Compute the effective timeframes NOW so it reflects
-    // any config changes since the last tick.
     final timeframes = Config.effectiveTimeframes;
-
-    if (timeframes.isEmpty) {
-      print('⚠️ No timeframes configured across any bot — skipping check');
-      _isBusy = false;
-      return;
-    }
-
-    final now     = DateTime.now();
-    final timeStr =
-        '${now.hour.toString().padLeft(2, '0')}:'
-        '${now.minute.toString().padLeft(2, '0')}';
-
-    print('🔍 Checking ${Config.symbols} on $timeframes at $timeStr');
+    final now        = DateTime.now();
+    final timeStr    = '${now.hour.toString().padLeft(2,'0')}:'
+                       '${now.minute.toString().padLeft(2,'0')}';
 
     if (service is AndroidServiceInstance) {
       service.setForegroundNotificationInfo(
-        title:   'HH/LL Bot — Last check: $timeStr',
-        content: '${Config.symbols.length} pair(s) · ${timeframes.join(', ')}',
+        title:   'HH/LL Bot — $timeStr',
+        content: '${Config.symbols.length} pairs · ${timeframes.join(', ')}',
       );
     }
     service.invoke('update', {'lastCheck': timeStr});
 
-    for (final symbol in Config.symbols) {
-      for (final timeframe in timeframes) {
-        if (_shouldStop) return;
-        await _checkTimeframe(symbol, timeframe, prefs, service);
+    // ── HH/LL checks (hit + new level) ──────────────────
+    if (timeframes.isNotEmpty) {
+      print('🔍 HH/LL: ${Config.symbols} on $timeframes at $timeStr');
+      for (final symbol in Config.symbols) {
+        for (final tf in timeframes) {
+          if (_shouldStop) return;
+          await _checkHHLL(symbol, tf, prefs, service);
+        }
       }
     }
+
+    // ── Manual price alerts ──────────────────────────────
+    await _checkPriceAlerts(prefs, service);
+
   } catch (e) {
     print('❌ Error in _runAllChecks: $e');
   } finally {
@@ -190,12 +180,10 @@ Future<void> _runAllChecks(ServiceInstance service) async {
   }
 }
 
-// ─── Check one symbol + timeframe ────────────────────────
-Future<void> _checkTimeframe(
-  String symbol,
-  String timeframe,
-  SharedPreferences prefs,
-  ServiceInstance service,
+// ─── HH/LL check for one symbol + timeframe ───────────────
+Future<void> _checkHHLL(
+  String symbol, String timeframe,
+  SharedPreferences prefs, ServiceInstance service,
 ) async {
   try {
     final candles = await BinanceService.fetchCandles(symbol, timeframe);
@@ -205,132 +193,135 @@ Future<void> _checkTimeframe(
     final lastClosed = candles[candles.length - 2];
     final liveCandle = candles[candles.length - 1];
 
-    // ── ALERT TYPE 1: HIT ────────────────────────────────
-    // Only fires for bots that have this timeframe in hitTimeframes.
-
-    if (result.hh != null) {
-      final hitKey = 'HH_HIT_${symbol}_${timeframe}_'
-          '${result.hh!.toStringAsFixed(5)}';
-      final alreadyAlerted = prefs.getBool(hitKey) ?? false;
-      final isHit = PivotService.isHit(lastClosed, result.hh!, true) ||
-                    PivotService.isHit(liveCandle,  result.hh!, true);
-
-      if (!alreadyAlerted && isHit) {
-        final ok = await TelegramService.sendHitAlert(
-          levelType:    'HH',
-          levelPrice:   result.hh!,
-          timeframe:    timeframe,
-          currentPrice: liveCandle.close,
-          symbol:       symbol,
-        );
-        if (ok) {
-          await prefs.setBool(hitKey, true);
-          service.invoke('alert', {
-            'symbol':    symbol,
-            'type':      'HH',
-            'kind':      'hit',
-            'price':     result.hh!,
-            'timeframe': timeframe,
-            'time':      DateTime.now().toIso8601String(),
-          });
-          print('✅ HIT $symbol HH @ ${result.hh} ($timeframe)');
-        } else {
-          print('❌ Telegram failed — HIT $symbol HH ($timeframe)');
-        }
+    // Alert type 1 — HIT
+    Future<void> checkHit(String type, double? level, bool isHH) async {
+      if (level == null) return;
+      final key = '${type}_HIT_${symbol}_${timeframe}_${level.toStringAsFixed(5)}';
+      if (prefs.getBool(key) ?? false) return;
+      final isHit = PivotService.isHit(lastClosed, level, isHH) ||
+                    PivotService.isHit(liveCandle,  level, isHH);
+      if (!isHit) return;
+      final ok = await TelegramService.sendHitAlert(
+        levelType: type, levelPrice: level,
+        timeframe: timeframe, currentPrice: liveCandle.close, symbol: symbol,
+      );
+      if (ok) {
+        await prefs.setBool(key, true);
+        service.invoke('alert', {
+          'symbol': symbol, 'type': type, 'kind': 'hit',
+          'price': level, 'timeframe': timeframe,
+          'time': DateTime.now().toIso8601String(),
+        });
+        print('✅ HIT $symbol $type @ $level ($timeframe)');
       }
     }
 
-    if (result.ll != null) {
-      final hitKey = 'LL_HIT_${symbol}_${timeframe}_'
-          '${result.ll!.toStringAsFixed(5)}';
-      final alreadyAlerted = prefs.getBool(hitKey) ?? false;
-      final isHit = PivotService.isHit(lastClosed, result.ll!, false) ||
-                    PivotService.isHit(liveCandle,  result.ll!, false);
-
-      if (!alreadyAlerted && isHit) {
-        final ok = await TelegramService.sendHitAlert(
-          levelType:    'LL',
-          levelPrice:   result.ll!,
-          timeframe:    timeframe,
-          currentPrice: liveCandle.close,
-          symbol:       symbol,
-        );
-        if (ok) {
-          await prefs.setBool(hitKey, true);
-          service.invoke('alert', {
-            'symbol':    symbol,
-            'type':      'LL',
-            'kind':      'hit',
-            'price':     result.ll!,
-            'timeframe': timeframe,
-            'time':      DateTime.now().toIso8601String(),
-          });
-          print('✅ HIT $symbol LL @ ${result.ll} ($timeframe)');
-        } else {
-          print('❌ Telegram failed — HIT $symbol LL ($timeframe)');
-        }
+    // Alert type 2 — NEW LEVEL
+    Future<void> checkNew(String type, double? level) async {
+      if (level == null) return;
+      final key = '${type}_NEW_${symbol}_${timeframe}_${level.toStringAsFixed(5)}';
+      if (prefs.getBool(key) ?? false) return;
+      final ok = await TelegramService.sendNewLevelAlert(
+        levelType: type, levelPrice: level,
+        timeframe: timeframe, symbol: symbol,
+      );
+      await prefs.setBool(key, true);
+      if (ok) {
+        service.invoke('alert', {
+          'symbol': symbol, 'type': type, 'kind': 'new',
+          'price': level, 'timeframe': timeframe,
+          'time': DateTime.now().toIso8601String(),
+        });
+        print('✨ NEW $symbol $type @ $level ($timeframe)');
       }
     }
 
-    // ── ALERT TYPE 2: NEW LEVEL ───────────────────────────
-    // Only fires for bots that have this timeframe in newTimeframes.
-    // Dedup key uses HH_NEW_ / LL_NEW_ prefix so it's independent.
-
-    if (result.hh != null) {
-      final newKey = 'HH_NEW_${symbol}_${timeframe}_'
-          '${result.hh!.toStringAsFixed(5)}';
-      final alreadyAlerted = prefs.getBool(newKey) ?? false;
-
-      if (!alreadyAlerted) {
-        final ok = await TelegramService.sendNewLevelAlert(
-          levelType:  'HH',
-          levelPrice: result.hh!,
-          timeframe:  timeframe,
-          symbol:     symbol,
-        );
-        // Always mark seen so we don't spam on same level value.
-        await prefs.setBool(newKey, true);
-        if (ok) {
-          service.invoke('alert', {
-            'symbol':    symbol,
-            'type':      'HH',
-            'kind':      'new',
-            'price':     result.hh!,
-            'timeframe': timeframe,
-            'time':      DateTime.now().toIso8601String(),
-          });
-          print('✨ NEW $symbol HH @ ${result.hh} ($timeframe)');
-        }
-      }
-    }
-
-    if (result.ll != null) {
-      final newKey = 'LL_NEW_${symbol}_${timeframe}_'
-          '${result.ll!.toStringAsFixed(5)}';
-      final alreadyAlerted = prefs.getBool(newKey) ?? false;
-
-      if (!alreadyAlerted) {
-        final ok = await TelegramService.sendNewLevelAlert(
-          levelType:  'LL',
-          levelPrice: result.ll!,
-          timeframe:  timeframe,
-          symbol:     symbol,
-        );
-        await prefs.setBool(newKey, true);
-        if (ok) {
-          service.invoke('alert', {
-            'symbol':    symbol,
-            'type':      'LL',
-            'kind':      'new',
-            'price':     result.ll!,
-            'timeframe': timeframe,
-            'time':      DateTime.now().toIso8601String(),
-          });
-          print('✨ NEW $symbol LL @ ${result.ll} ($timeframe)');
-        }
-      }
-    }
+    await checkHit('HH', result.hh, true);
+    await checkHit('LL', result.ll, false);
+    await checkNew('HH', result.hh);
+    await checkNew('LL', result.ll);
   } catch (e) {
     print('❌ Error on $symbol $timeframe: $e');
+  }
+}
+
+// ─── Manual price alert check ─────────────────────────────
+Future<void> _checkPriceAlerts(
+    SharedPreferences prefs, ServiceInstance service) async {
+  final active = Config.priceAlerts.where((a) => a.shouldFire).toList();
+  if (active.isEmpty) return;
+
+  print('🔔 Checking ${active.length} price alert(s)...');
+
+  // Group by symbol to minimize API calls
+  final Map<String, List<PriceAlert>> bySymbol = {};
+  for (final alert in active) {
+    bySymbol.putIfAbsent(alert.symbol, () => []).add(alert);
+  }
+
+  bool anyTriggered = false;
+
+  for (final entry in bySymbol.entries) {
+    if (_shouldStop) break;
+
+    final symbol       = entry.key;
+    final currentPrice = await BinanceService.getCurrentPrice(symbol);
+    if (currentPrice == null) {
+      print('⚠️ Could not get price for $symbol — skipping');
+      continue;
+    }
+
+    for (final alert in entry.value) {
+      if (!alert.matches(currentPrice)) continue;
+
+      // Find the bot
+      TelegramBot? bot;
+      try {
+        bot = Config.bots.firstWhere((b) => b.id == alert.botId);
+      } catch (_) {
+        // Bot was deleted — fall back to first configured bot
+        try { bot = Config.bots.firstWhere((b) => b.isConfigured); }
+        catch (_) { /* no bots configured */ }
+      }
+
+      if (bot == null || !bot.isConfigured) {
+        print('⚠️ No configured bot for alert "${alert.label}" — skipping');
+        // Still mark triggered so we don't spam the check
+        alert.isTriggered = true;
+        anyTriggered = true;
+        continue;
+      }
+
+      final ok = await TelegramService.sendPriceAlert(
+        bot:          bot,
+        alert:        alert,
+        currentPrice: currentPrice,
+      );
+
+      // Always mark triggered (even if send failed) to prevent spam
+      alert.isTriggered = true;
+      anyTriggered = true;
+
+      if (ok) {
+        service.invoke('priceAlert', {
+          'id':          alert.id,
+          'symbol':      alert.symbol,
+          'label':       alert.label,
+          'targetPrice': alert.targetPrice,
+          'currentPrice': currentPrice,
+          'condition':   alert.condition,
+          'time':        DateTime.now().toIso8601String(),
+        });
+        print('🔔 PRICE ALERT: ${alert.label.isNotEmpty ? alert.label : alert.symbol} '
+            '@ $currentPrice (target ${alert.targetPrice})');
+      } else {
+        print('❌ Price alert send failed for ${alert.symbol}');
+      }
+    }
+  }
+
+  // Persist updated triggered state back to SharedPreferences
+  if (anyTriggered) {
+    await ConfigService.savePriceAlertsFromBackground(prefs);
   }
 }

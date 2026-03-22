@@ -1,5 +1,5 @@
 // ─── services/binance_service.dart ──────────────────────
-// Fetches OHLCV candles from Binance REST API.
+// Fetches OHLCV candles and current price from Binance REST API.
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -23,35 +23,28 @@ class Candle {
   });
 }
 
-/// Result of symbol validation
 class SymbolValidationResult {
   final bool isValid;
-  final String? error; // null if valid
-
+  final String? error;
   const SymbolValidationResult({required this.isValid, this.error});
 }
 
 class BinanceService {
-  static const String _baseUrl       = 'https://api.binance.com/api/v3/klines';
-  static const String _exchangeInfo  = 'https://api.binance.com/api/v3/exchangeInfo';
-  static const String _tickerUrl     = 'https://api.binance.com/api/v3/ticker/price';
+  static const String _baseUrl      = 'https://api.binance.com/api/v3/klines';
+  static const String _tickerUrl    = 'https://api.binance.com/api/v3/ticker/price';
 
-  /// Validate a symbol against Binance — returns error string or null if OK
+  // ─── Validate a symbol against Binance ───────────────
   static Future<SymbolValidationResult> validateSymbol(String symbol) async {
     if (symbol.isEmpty) {
-      return const SymbolValidationResult(isValid: false, error: 'Symbol cannot be empty');
+      return const SymbolValidationResult(
+          isValid: false, error: 'Symbol cannot be empty');
     }
-
     try {
-      // Use ticker/price endpoint — fast single-symbol check
-      final uri = Uri.parse('$_tickerUrl?symbol=${symbol.toUpperCase()}');
+      final uri      = Uri.parse('$_tickerUrl?symbol=${symbol.toUpperCase()}');
       final response = await http.get(uri).timeout(const Duration(seconds: 8));
-
       if (response.statusCode == 200) {
         return const SymbolValidationResult(isValid: true);
       }
-
-      // Parse Binance error message
       final body = jsonDecode(response.body);
       final msg  = body['msg'] as String? ?? 'Invalid symbol';
       return SymbolValidationResult(isValid: false, error: msg);
@@ -60,13 +53,33 @@ class BinanceService {
     }
   }
 
-  /// Fetch candles for a given symbol and timeframe
-  static Future<List<Candle>> fetchCandles(String symbol, String timeframe) async {
+  // ─── Get the current price of a symbol ───────────────
+  /// Returns null if the request fails or the symbol is invalid.
+  static Future<double?> getCurrentPrice(String symbol) async {
+    try {
+      final uri      = Uri.parse('$_tickerUrl?symbol=${symbol.toUpperCase()}');
+      final response = await http.get(uri).timeout(const Duration(seconds: 8));
+      if (response.statusCode == 200) {
+        final body  = jsonDecode(response.body);
+        final price = body['price'] as String?;
+        return price != null ? double.tryParse(price) : null;
+      }
+      return null;
+    } catch (e) {
+      print('❌ getCurrentPrice failed for $symbol: $e');
+      return null;
+    }
+  }
+
+  // ─── Fetch OHLCV candles ──────────────────────────────
+  static Future<List<Candle>> fetchCandles(
+      String symbol, String timeframe) async {
     final uri = Uri.parse(
       '$_baseUrl?symbol=$symbol&interval=$timeframe&limit=${Config.limit}',
     );
 
-    final response = await http.get(uri).timeout(const Duration(seconds: 15));
+    final response =
+        await http.get(uri).timeout(const Duration(seconds: 15));
 
     if (response.statusCode != 200) {
       final body = jsonDecode(response.body);

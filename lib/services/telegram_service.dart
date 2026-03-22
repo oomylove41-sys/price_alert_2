@@ -1,7 +1,6 @@
 // ─── services/telegram_service.dart ─────────────────────
-// Sends alert messages to Telegram.
-// Each send method filters to only the bots that have the
-// given timeframe enabled for that alert type.
+// Sends HH/LL and manual price alerts to Telegram.
+// Each method routes to the correct bot(s).
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -19,8 +18,8 @@ class TelegramService {
   };
 
   // ──────────────────────────────────────────────────────
-  // ALERT TYPE 1: Price HITS an existing HH/LL level
-  // Only sends to bots that have [timeframe] in hitTimeframes.
+  // ALERT TYPE 1: HIT — price touches an existing HH/LL
+  // Sends to all bots that have [timeframe] in hitTimeframes.
   // ──────────────────────────────────────────────────────
   static Future<bool> sendHitAlert({
     required String levelType,
@@ -33,32 +32,26 @@ class TelegramService {
         (b) => b.isConfigured && b.hitTimeframes.contains(timeframe));
     if (targets.isEmpty) return false;
 
-    final bool   isHH   = levelType == 'HH';
-    final String emoji  = isHH ? '🔴' : '🟢';
-    final String signal = isHH
-        ? 'Resistance hit — watch for reversal ↓'
-        : 'Support hit — watch for bounce ↑';
-    final String tfName = _tfNames[timeframe] ?? timeframe;
-
-    final message =
-        '$emoji <b>$levelType Level Hit!</b>\n'
-        '\n'
+    final isHH  = levelType == 'HH';
+    final tfName = _tfNames[timeframe] ?? timeframe;
+    final msg =
+        '${isHH ? "🔴" : "🟢"} <b>$levelType Level Hit!</b>\n\n'
         '📊 <b>Symbol:</b>        $symbol\n'
         '⏱ <b>Timeframe:</b>    $tfName\n'
         '🎯 <b>Level Price:</b>  <code>${levelPrice.toStringAsFixed(5)}</code>\n'
         '💰 <b>Current Price:</b> <code>${currentPrice.toStringAsFixed(5)}</code>\n'
-        '📌 <b>Signal:</b>       $signal\n';
+        '📌 <b>Signal:</b>       ${isHH ? "Resistance hit — watch for reversal ↓" : "Support hit — watch for bounce ↑"}\n';
 
     bool anyOk = false;
     for (final bot in targets) {
-      if (await _sendToBot(bot, message)) anyOk = true;
+      if (await _sendToBot(bot, msg)) anyOk = true;
     }
     return anyOk;
   }
 
   // ──────────────────────────────────────────────────────
-  // ALERT TYPE 2: A NEW HH/LL pivot is FORMED
-  // Only sends to bots that have [timeframe] in newTimeframes.
+  // ALERT TYPE 2: NEW — a brand-new HH/LL pivot forms
+  // Sends to all bots that have [timeframe] in newTimeframes.
   // ──────────────────────────────────────────────────────
   static Future<bool> sendNewLevelAlert({
     required String levelType,
@@ -70,49 +63,64 @@ class TelegramService {
         (b) => b.isConfigured && b.newTimeframes.contains(timeframe));
     if (targets.isEmpty) return false;
 
-    final bool   isHH   = levelType == 'HH';
-    final String emoji  = isHH ? '📈' : '📉';
-    final String desc   = isHH ? 'Higher High' : 'Lower Low';
-    final String signal = isHH
-        ? 'New resistance zone formed ↑'
-        : 'New support zone formed ↓';
-    final String tfName = _tfNames[timeframe] ?? timeframe;
-
-    final message =
-        '$emoji <b>New $desc Formed!</b>\n'
-        '\n'
+    final isHH   = levelType == 'HH';
+    final tfName  = _tfNames[timeframe] ?? timeframe;
+    final msg =
+        '${isHH ? "📈" : "📉"} <b>New ${isHH ? "Higher High" : "Lower Low"} Formed!</b>\n\n'
         '📊 <b>Symbol:</b>       $symbol\n'
         '⏱ <b>Timeframe:</b>   $tfName\n'
         '🎯 <b>Level Price:</b> <code>${levelPrice.toStringAsFixed(5)}</code>\n'
-        '📌 <b>Signal:</b>      $signal\n';
+        '📌 <b>Signal:</b>      ${isHH ? "New resistance zone formed ↑" : "New support zone formed ↓"}\n';
 
     bool anyOk = false;
     for (final bot in targets) {
-      if (await _sendToBot(bot, message)) anyOk = true;
+      if (await _sendToBot(bot, msg)) anyOk = true;
     }
     return anyOk;
   }
 
   // ──────────────────────────────────────────────────────
-  // TEST CONNECTION for a specific bot
+  // ALERT TYPE 3: PRICE ALERT — manually set price target
+  // Sends to a specific bot chosen by the user.
+  // ──────────────────────────────────────────────────────
+  static Future<bool> sendPriceAlert({
+    required TelegramBot bot,
+    required PriceAlert  alert,
+    required double      currentPrice,
+  }) async {
+    if (!bot.isConfigured) return false;
+
+    final isAbove    = alert.condition == 'above';
+    final emoji      = isAbove ? '🚀' : '📉';
+    final dir        = isAbove ? 'crossed above' : 'crossed below';
+    final dispLabel  = alert.label.isNotEmpty
+        ? alert.label
+        : '${alert.symbol} Price Alert';
+
+    final msg =
+        '$emoji <b>Price Alert Triggered!</b>\n\n'
+        '🏷 <b>Alert:</b>   $dispLabel\n'
+        '📊 <b>Symbol:</b>  ${alert.symbol}\n'
+        '🎯 <b>Target:</b>  <code>${alert.targetPrice.toStringAsFixed(5)}</code>\n'
+        '💰 <b>Current:</b> <code>${currentPrice.toStringAsFixed(5)}</code>\n'
+        '📌 <b>Signal:</b>  Price $dir ${alert.targetPrice.toStringAsFixed(5)}\n';
+
+    return _sendToBot(bot, msg);
+  }
+
+  // ──────────────────────────────────────────────────────
+  // TEST connection for a specific bot
   // ──────────────────────────────────────────────────────
   static Future<String?> testConnection(TelegramBot bot) async {
     if (!bot.isConfigured) {
-      if (bot.token.isEmpty || bot.token == 'YOUR_TELEGRAM_BOT_TOKEN') {
-        return 'Bot token is not set';
-      }
-      return 'Chat ID is not set';
+      return bot.token.isEmpty || bot.token == 'YOUR_TELEGRAM_BOT_TOKEN'
+          ? 'Bot token is not set'
+          : 'Chat ID is not set';
     }
-
-    final hitTfs = bot.hitTimeframes.isEmpty
-        ? 'None'
-        : bot.hitTimeframes.join(', ');
-    final newTfs = bot.newTimeframes.isEmpty
-        ? 'None'
-        : bot.newTimeframes.join(', ');
-
+    final hitTfs = bot.hitTimeframes.isEmpty ? 'None' : bot.hitTimeframes.join(', ');
+    final newTfs = bot.newTimeframes.isEmpty ? 'None' : bot.newTimeframes.join(', ');
     try {
-      final uri = Uri.parse('${_baseUrl}${bot.token}/sendMessage');
+      final uri      = Uri.parse('${_baseUrl}${bot.token}/sendMessage');
       final response = await http.post(
         uri,
         headers: {'Content-Type': 'application/json'},
@@ -123,11 +131,10 @@ class TelegramService {
               '🤖 Bot: <b>${bot.name}</b>\n\n'
               '🎯 Hit alert timeframes: <code>$hitTfs</code>\n'
               '✨ New level timeframes: <code>$newTfs</code>\n\n'
-              'This bot is configured and ready to send alerts.',
+              'Bot is configured and ready.',
           'parse_mode': 'HTML',
         }),
       ).timeout(const Duration(seconds: 10));
-
       final body = jsonDecode(response.body);
       if (response.statusCode == 200 && body['ok'] == true) return null;
       return body['description'] as String? ?? 'Unknown Telegram error';
@@ -141,7 +148,7 @@ class TelegramService {
   // ──────────────────────────────────────────────────────
   static Future<bool> _sendToBot(TelegramBot bot, String message) async {
     try {
-      final uri = Uri.parse('${_baseUrl}${bot.token}/sendMessage');
+      final uri      = Uri.parse('${_baseUrl}${bot.token}/sendMessage');
       final response = await http.post(
         uri,
         headers: {'Content-Type': 'application/json'},
@@ -151,7 +158,6 @@ class TelegramService {
           'parse_mode': 'HTML',
         }),
       ).timeout(const Duration(seconds: 10));
-
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body);
         if (body['ok'] == true) return true;
