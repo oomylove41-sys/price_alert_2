@@ -47,8 +47,10 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
     if (result != null && mounted) {
       setState(() {
         final idx = _alerts.indexWhere((a) => a.id == result.id);
-        if (idx >= 0) _alerts[idx] = result;
-        else _alerts.insert(0, result);
+        if (idx >= 0)
+          _alerts[idx] = result;
+        else
+          _alerts.insert(0, result);
       });
       await _save();
     }
@@ -59,7 +61,7 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
       final idx = _alerts.indexWhere((a) => a.id == alert.id);
       if (idx >= 0) {
         _alerts[idx] = alert.copyWith(
-          isActive:    !alert.isActive,
+          isActive: !alert.isActive,
           isTriggered: false, // re-arm when re-activated
         );
       }
@@ -77,7 +79,8 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
     await _save();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: const Text('Alert reset — will fire again on next price match'),
+        content:
+            const Text('Alert reset — will fire again on next price match'),
         backgroundColor: Colors.blue.shade700,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -93,7 +96,7 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
       builder: (_) => AlertDialog(
         title: const Text('Delete Alert'),
         content: Text(
-          'Delete "${alert.label.isNotEmpty ? alert.label : "${alert.symbol} alert"}"?'),
+            'Delete "${alert.label.isNotEmpty ? alert.label : "${alert.symbol} alert"}"?'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -121,8 +124,7 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
       appBar: AppBar(
         title: const Text('Price Alerts'),
         centerTitle: false,
-        backgroundColor:
-            isDark ? const Color(0xFF1E1E2E) : Colors.white,
+        backgroundColor: isDark ? const Color(0xFF1E1E2E) : Colors.white,
         foregroundColor: isDark ? Colors.white : Colors.black,
         elevation: 0,
         actions: [
@@ -133,8 +135,7 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
                 onPressed: () => _openEdit(null),
                 icon: const Icon(Icons.add_rounded, size: 18),
                 label: const Text('Add'),
-                style: TextButton.styleFrom(
-                    foregroundColor: Colors.blueAccent),
+                style: TextButton.styleFrom(foregroundColor: Colors.blueAccent),
               ),
             ),
         ],
@@ -160,13 +161,11 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
               size: 64, color: Colors.grey.shade400),
           const SizedBox(height: 16),
           const Text('No price alerts yet',
-              style:
-                  TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Text(
             'Tap the button below to add your first alert.',
-            style: TextStyle(
-                fontSize: 13, color: Colors.grey.shade500),
+            style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
           ),
           const SizedBox(height: 32),
           ElevatedButton.icon(
@@ -176,8 +175,7 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.blueAccent,
               foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 24, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
             ),
@@ -189,9 +187,9 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
 
   Widget _buildList(bool isDark) {
     // Group: active alerts first, then triggered, then paused
-    final active    = _alerts.where((a) => a.isActive && !a.isTriggered).toList();
+    final active = _alerts.where((a) => a.isActive && !a.isTriggered).toList();
     final triggered = _alerts.where((a) => a.isTriggered).toList();
-    final paused    = _alerts.where((a) => !a.isActive && !a.isTriggered).toList();
+    final paused = _alerts.where((a) => !a.isActive && !a.isTriggered).toList();
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
@@ -199,36 +197,36 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
         if (active.isNotEmpty) ...[
           _SectionLabel('Active (${active.length})'),
           ...active.map((a) => _AlertCard(
-                alert:         a,
-                isDark:        isDark,
-                onEdit:        () => _openEdit(a),
-                onToggle:      () => _toggleActive(a),
-                onDelete:      () => _delete(a),
-                onReset:       () => _resetTriggered(a),
+                alert: a,
+                isDark: isDark,
+                onEdit: () => _openEdit(a),
+                onToggle: () => _toggleActive(a),
+                onDelete: () => _delete(a),
+                onReset: () => _resetTriggered(a),
               )),
         ],
         if (triggered.isNotEmpty) ...[
           const SizedBox(height: 8),
           _SectionLabel('Triggered (${triggered.length})'),
           ...triggered.map((a) => _AlertCard(
-                alert:         a,
-                isDark:        isDark,
-                onEdit:        () => _openEdit(a),
-                onToggle:      () => _toggleActive(a),
-                onDelete:      () => _delete(a),
-                onReset:       () => _resetTriggered(a),
+                alert: a,
+                isDark: isDark,
+                onEdit: () => _openEdit(a),
+                onToggle: () => _toggleActive(a),
+                onDelete: () => _delete(a),
+                onReset: () => _resetTriggered(a),
               )),
         ],
         if (paused.isNotEmpty) ...[
           const SizedBox(height: 8),
           _SectionLabel('Paused (${paused.length})'),
           ...paused.map((a) => _AlertCard(
-                alert:         a,
-                isDark:        isDark,
-                onEdit:        () => _openEdit(a),
-                onToggle:      () => _toggleActive(a),
-                onDelete:      () => _delete(a),
-                onReset:       () => _resetTriggered(a),
+                alert: a,
+                isDark: isDark,
+                onEdit: () => _openEdit(a),
+                onToggle: () => _toggleActive(a),
+                onDelete: () => _delete(a),
+                onReset: () => _resetTriggered(a),
               )),
         ],
       ],
@@ -257,8 +255,8 @@ class _SectionLabel extends StatelessWidget {
 
 // ─── Alert card ───────────────────────────────────────────
 class _AlertCard extends StatelessWidget {
-  final PriceAlert  alert;
-  final bool        isDark;
+  final PriceAlert alert;
+  final bool isDark;
   final VoidCallback onEdit;
   final VoidCallback onToggle;
   final VoidCallback onDelete;
@@ -275,7 +273,7 @@ class _AlertCard extends StatelessWidget {
 
   Color get _borderColor {
     if (alert.isTriggered) return Colors.grey.shade400;
-    if (!alert.isActive)   return Colors.grey.shade500;
+    if (!alert.isActive) return Colors.grey.shade500;
     if (alert.condition == 'touch') return Colors.teal.shade400;
     return alert.condition == 'above'
         ? Colors.orange.shade400
@@ -284,31 +282,33 @@ class _AlertCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isAbove  = alert.condition == 'above';
-    final isTouch  = alert.condition == 'touch';
+    final isAbove = alert.condition == 'above';
+    final isTouch = alert.condition == 'touch';
     final dirEmoji = isTouch ? '⬡' : (isAbove ? '▲' : '▼');
     final dirColor = isTouch
         ? Colors.teal.shade400
         : (isAbove ? Colors.orange.shade400 : Colors.green.shade400);
-    final cardBg   = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+    final cardBg = isDark ? const Color(0xFF1E1E2E) : Colors.white;
 
     // Find bot name
     String botName = 'Unknown Bot';
     try {
       botName = Config.bots.firstWhere((b) => b.id == alert.botId).name;
-    } catch (_) { botName = 'Bot deleted'; }
+    } catch (_) {
+      botName = 'Bot deleted';
+    }
 
     // Status
     String statusText;
-    Color  statusColor;
+    Color statusColor;
     if (alert.isTriggered) {
-      statusText  = 'Triggered';
+      statusText = 'Triggered';
       statusColor = Colors.grey.shade400;
     } else if (!alert.isActive) {
-      statusText  = 'Paused';
+      statusText = 'Paused';
       statusColor = Colors.grey.shade500;
     } else {
-      statusText  = 'Watching';
+      statusText = 'Watching';
       statusColor = Colors.blueAccent;
     }
 
@@ -353,8 +353,7 @@ class _AlertCard extends StatelessWidget {
                     if (alert.label.isNotEmpty)
                       Text(alert.symbol,
                           style: TextStyle(
-                              fontSize: 11.5,
-                              color: Colors.grey.shade500)),
+                              fontSize: 11.5, color: Colors.grey.shade500)),
 
                     const SizedBox(height: 6),
 
@@ -370,12 +369,11 @@ class _AlertCard extends StatelessWidget {
                         isTouch
                             ? 'When price touches ${_fmt(alert.targetPrice)}'
                             : 'When price goes ${isAbove ? "above" : "below"} '
-                              '${_fmt(alert.targetPrice)}',
+                                '${_fmt(alert.targetPrice)}',
                         style: TextStyle(
                           fontSize: 12.5,
-                          color: alert.isTriggered
-                              ? Colors.grey.shade400
-                              : null,
+                          color:
+                              alert.isTriggered ? Colors.grey.shade400 : null,
                         ),
                       ),
                     ]),
@@ -389,8 +387,7 @@ class _AlertCard extends StatelessWidget {
                       const SizedBox(width: 4),
                       Text(botName,
                           style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.grey.shade500)),
+                              fontSize: 11, color: Colors.grey.shade500)),
                       const SizedBox(width: 10),
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -448,7 +445,7 @@ class _AlertCard extends StatelessWidget {
 
   String _fmt(double v) {
     if (v >= 1000) return v.toStringAsFixed(2);
-    if (v >= 1)    return v.toStringAsFixed(4);
+    if (v >= 1) return v.toStringAsFixed(4);
     return v.toStringAsFixed(6);
   }
 }
@@ -465,11 +462,11 @@ class _AlertEditSheet extends StatefulWidget {
 }
 
 class _AlertEditSheetState extends State<_AlertEditSheet> {
-  final _formKey      = GlobalKey<FormState>();
+  final _formKey = GlobalKey<FormState>();
   late final TextEditingController _labelCtrl;
   late final TextEditingController _symbolCtrl;
   late final TextEditingController _priceCtrl;
-  late String _condition;      // 'above' | 'below'
+  late String _condition; // 'above' | 'below'
   late String _selectedBotId;
   bool _validating = false;
   bool _symbolValid = false;
@@ -477,14 +474,14 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
   @override
   void initState() {
     super.initState();
-    final e         = widget.existing;
-    _labelCtrl      = TextEditingController(text: e?.label ?? '');
-    _symbolCtrl     = TextEditingController(text: e?.symbol ?? '');
-    _priceCtrl      = TextEditingController(
-        text: e != null ? _fmtRaw(e.targetPrice) : '');
-    _condition      = e?.condition ?? 'above';
-    _selectedBotId  = e?.botId ?? _defaultBotId();
-    _symbolValid    = e != null; // existing symbol already validated
+    final e = widget.existing;
+    _labelCtrl = TextEditingController(text: e?.label ?? '');
+    _symbolCtrl = TextEditingController(text: e?.symbol ?? '');
+    _priceCtrl =
+        TextEditingController(text: e != null ? _fmtRaw(e.targetPrice) : '');
+    _condition = e?.condition ?? 'above';
+    _selectedBotId = e?.botId ?? _defaultBotId();
+    _symbolValid = e != null; // existing symbol already validated
   }
 
   String _defaultBotId() {
@@ -496,8 +493,11 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
           .id;
     } catch (_) {}
     // Fall back to any configured bot
-    try { return Config.bots.firstWhere((b) => b.isConfigured).id; }
-    catch (_) { return Config.bots.first.id; }
+    try {
+      return Config.bots.firstWhere((b) => b.isConfigured).id;
+    } catch (_) {
+      return Config.bots.first.id;
+    }
   }
 
   @override
@@ -510,24 +510,31 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
 
   Future<void> _validateSymbol(String value) async {
     final sym = value.trim().toUpperCase();
-    if (sym.isEmpty) { setState(() => _symbolValid = false); return; }
+    if (sym.isEmpty) {
+      setState(() => _symbolValid = false);
+      return;
+    }
     setState(() => _validating = true);
     final result = await BinanceService.validateSymbol(sym);
-    if (mounted) setState(() { _validating = false; _symbolValid = result.isValid; });
+    if (mounted)
+      setState(() {
+        _validating = false;
+        _symbolValid = result.isValid;
+      });
   }
 
   PriceAlert _build() {
     final e = widget.existing;
     return PriceAlert(
-      id:          e?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
-      symbol:      _symbolCtrl.text.trim().toUpperCase(),
+      id: e?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
+      symbol: _symbolCtrl.text.trim().toUpperCase(),
       targetPrice: double.parse(_priceCtrl.text.trim()),
-      condition:   _condition,
-      botId:       _selectedBotId,
-      label:       _labelCtrl.text.trim(),
-      isActive:    e?.isActive ?? true,
+      condition: _condition,
+      botId: _selectedBotId,
+      label: _labelCtrl.text.trim(),
+      isActive: e?.isActive ?? true,
       isTriggered: e?.isTriggered ?? false,
-      createdAt:   e?.createdAt,
+      createdAt: e?.createdAt,
     );
   }
 
@@ -537,7 +544,8 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
       _snack('Validate the symbol first', isError: true);
       return;
     }
-    final eligibleBots = Config.bots.where((b) => b.canReceiveManualAlerts).toList();
+    final eligibleBots =
+        Config.bots.where((b) => b.canReceiveManualAlerts).toList();
     if (eligibleBots.isEmpty) {
       _snack(
         'No bots have "Manual Price Alerts" enabled.\n'
@@ -556,8 +564,7 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
   void _snack(String msg, {required bool isError}) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
-      backgroundColor:
-          isError ? Colors.red.shade700 : Colors.green.shade700,
+      backgroundColor: isError ? Colors.red.shade700 : Colors.green.shade700,
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       margin: const EdgeInsets.all(12),
@@ -566,10 +573,10 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark     = Theme.of(context).brightness == Brightness.dark;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final sheetColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
-    final isEdit     = widget.existing != null;
-    final bots       = Config.bots;
+    final isEdit = widget.existing != null;
+    final bots = Config.bots;
     // Ensure selectedBotId is valid
     if (bots.isNotEmpty && !bots.any((b) => b.id == _selectedBotId)) {
       _selectedBotId = bots.first.id;
@@ -577,8 +584,8 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
 
     return DraggableScrollableSheet(
       initialChildSize: 0.9,
-      minChildSize:     0.5,
-      maxChildSize:     0.97,
+      minChildSize: 0.5,
+      maxChildSize: 0.97,
       builder: (_, controller) => Container(
         decoration: BoxDecoration(
           color: sheetColor,
@@ -589,7 +596,8 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
             const SizedBox(height: 12),
             // Drag handle
             Container(
-              width: 40, height: 4,
+              width: 40,
+              height: 4,
               decoration: BoxDecoration(
                 color: isDark ? Colors.grey.shade700 : Colors.grey.shade300,
                 borderRadius: BorderRadius.circular(2),
@@ -622,7 +630,6 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-
                       // ── Label (optional) ──────────────
                       const _Label('Label (optional)'),
                       _Field(
@@ -674,15 +681,15 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
                                 elevation: 0,
                                 shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(10)),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 14),
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 14),
                               ),
                               child: _validating
                                   ? const SizedBox(
-                                      width: 18, height: 18,
+                                      width: 18,
+                                      height: 18,
                                       child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white))
+                                          strokeWidth: 2, color: Colors.white))
                                   : const Text('Check',
                                       style: TextStyle(fontSize: 13)),
                             ),
@@ -700,8 +707,7 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
                         inputType: const TextInputType.numberWithOptions(
                             decimal: true),
                         inputFormatters: [
-                          FilteringTextInputFormatter.allow(
-                              RegExp(r'[0-9.]')),
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                         ],
                         validator: (v) {
                           if (v == null || v.trim().isEmpty) {
@@ -725,34 +731,35 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
                         Row(children: [
                           Expanded(
                             child: _ConditionButton(
-                              label:    '▲  Cross Above',
+                              label: '▲  Cross Above',
                               subtitle: 'Price ≥ target',
                               selected: _condition == 'above',
-                              color:    Colors.orange,
-                              isDark:   isDark,
-                              onTap:    () => setState(() => _condition = 'above'),
+                              color: Colors.orange,
+                              isDark: isDark,
+                              onTap: () => setState(() => _condition = 'above'),
                             ),
                           ),
                           const SizedBox(width: 10),
                           Expanded(
                             child: _ConditionButton(
-                              label:    '▼  Cross Below',
+                              label: '▼  Cross Below',
                               subtitle: 'Price ≤ target',
                               selected: _condition == 'below',
-                              color:    Colors.green,
-                              isDark:   isDark,
-                              onTap:    () => setState(() => _condition = 'below'),
+                              color: Colors.green,
+                              isDark: isDark,
+                              onTap: () => setState(() => _condition = 'below'),
                             ),
                           ),
                         ]),
                         const SizedBox(height: 10),
                         _ConditionButton(
-                          label:    '⬡  Touch',
-                          subtitle: 'Price comes within 0.2% of target (either side)',
+                          label: '⬡  Touch',
+                          subtitle:
+                              'Price comes within 0.2% of target (either side)',
                           selected: _condition == 'touch',
-                          color:    Colors.teal,
-                          isDark:   isDark,
-                          onTap:    () => setState(() => _condition = 'touch'),
+                          color: Colors.teal,
+                          isDark: isDark,
+                          onTap: () => setState(() => _condition = 'touch'),
                         ),
                       ]),
                       const SizedBox(height: 20),
@@ -762,18 +769,20 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
                       const SizedBox(height: 8),
                       if (bots.isEmpty)
                         _NoBotWarning(reason: 'no-bots')
-                      else if (bots.where((b) => b.canReceiveManualAlerts).isEmpty)
+                      else if (bots
+                          .where((b) => b.canReceiveManualAlerts)
+                          .isEmpty)
                         _NoBotWarning(reason: 'none-enabled')
                       else
                         ...bots
                             .where((b) => b.canReceiveManualAlerts)
                             .map((bot) => _BotOption(
-                          bot:      bot,
-                          selected: bot.id == _selectedBotId,
-                          isDark:   isDark,
-                          onTap:    () =>
-                              setState(() => _selectedBotId = bot.id),
-                        )),
+                                  bot: bot,
+                                  selected: bot.id == _selectedBotId,
+                                  isDark: isDark,
+                                  onTap: () =>
+                                      setState(() => _selectedBotId = bot.id),
+                                )),
 
                       const SizedBox(height: 28),
 
@@ -808,8 +817,11 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
     );
   }
 
-  String _fmtRaw(double v) => v.toStringAsFixed(
-      v >= 1000 ? 2 : v >= 1 ? 4 : 6);
+  String _fmtRaw(double v) => v.toStringAsFixed(v >= 1000
+      ? 2
+      : v >= 1
+          ? 4
+          : 6);
 }
 
 // ─── No-bot warning banner ────────────────────────────────
@@ -822,7 +834,7 @@ class _NoBotWarning extends StatelessWidget {
     final msg = reason == 'no-bots'
         ? 'No Telegram bots configured yet.\nAdd a bot from the main screen first.'
         : 'No bots have "Manual Price Alerts" enabled.\n'
-          'Open a bot (🤖 icon top-right) → enable 🔔 Manual Price Alerts.';
+            'Open a bot (🤖 icon top-right) → enable 🔔 Manual Price Alerts.';
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -838,8 +850,7 @@ class _NoBotWarning extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(msg,
-                style: const TextStyle(
-                    fontSize: 12.5, color: Colors.orange)),
+                style: const TextStyle(fontSize: 12.5, color: Colors.orange)),
           ),
         ],
       ),
@@ -851,13 +862,17 @@ class _NoBotWarning extends StatelessWidget {
 class _ConditionButton extends StatelessWidget {
   final String label;
   final String subtitle;
-  final bool   selected;
-  final Color  color;
-  final bool   isDark;
+  final bool selected;
+  final Color color;
+  final bool isDark;
   final VoidCallback onTap;
   const _ConditionButton({
-    required this.label, required this.subtitle, required this.selected,
-    required this.color, required this.isDark, required this.onTap,
+    required this.label,
+    required this.subtitle,
+    required this.selected,
+    required this.color,
+    required this.isDark,
+    required this.onTap,
   });
 
   @override
@@ -891,9 +906,8 @@ class _ConditionButton extends StatelessWidget {
             Text(subtitle,
                 style: TextStyle(
                     fontSize: 11,
-                    color: isDark
-                        ? Colors.grey.shade400
-                        : Colors.grey.shade500)),
+                    color:
+                        isDark ? Colors.grey.shade400 : Colors.grey.shade500)),
           ],
         ),
       ),
@@ -904,12 +918,14 @@ class _ConditionButton extends StatelessWidget {
 // ─── Bot selection tile ───────────────────────────────────
 class _BotOption extends StatelessWidget {
   final TelegramBot bot;
-  final bool        selected;
-  final bool        isDark;
+  final bool selected;
+  final bool isDark;
   final VoidCallback onTap;
   const _BotOption({
-    required this.bot, required this.selected,
-    required this.isDark, required this.onTap,
+    required this.bot,
+    required this.selected,
+    required this.isDark,
+    required this.onTap,
   });
 
   @override
@@ -935,7 +951,8 @@ class _BotOption extends StatelessWidget {
         child: Row(children: [
           // Radio dot
           Container(
-            width: 18, height: 18,
+            width: 18,
+            height: 18,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
@@ -946,7 +963,8 @@ class _BotOption extends StatelessWidget {
             alignment: Alignment.center,
             child: selected
                 ? Container(
-                    width: 8, height: 8,
+                    width: 8,
+                    height: 8,
                     decoration: const BoxDecoration(
                       color: Colors.blueAccent,
                       shape: BoxShape.circle,
@@ -969,8 +987,8 @@ class _BotOption extends StatelessWidget {
                           fontSize: 11, color: Colors.orange.shade400))
                 else
                   Text('Chat: ${bot.chatId}',
-                      style: TextStyle(
-                          fontSize: 11, color: Colors.grey.shade500)),
+                      style:
+                          TextStyle(fontSize: 11, color: Colors.grey.shade500)),
               ],
             ),
           ),
@@ -989,13 +1007,13 @@ class _Label extends StatelessWidget {
   const _Label(this.text);
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 6),
-    child: Text(text,
-        style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: Colors.blueAccent)),
-  );
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Text(text,
+            style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.blueAccent)),
+      );
 }
 
 class _Field extends StatelessWidget {
@@ -1024,18 +1042,18 @@ class _Field extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return TextFormField(
-      controller:         controller,
-      keyboardType:       inputType,
-      inputFormatters:    inputFormatters,
+      controller: controller,
+      keyboardType: inputType,
+      inputFormatters: inputFormatters,
       textCapitalization: capitalization,
-      onChanged:          onChanged,
+      onChanged: onChanged,
       style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
       decoration: InputDecoration(
-        hintText:    hint,
-        hintStyle:   TextStyle(color: Colors.grey.shade500, fontSize: 13),
-        suffixIcon:  suffix,
-        filled:      true,
-        fillColor:   isDark ? const Color(0xFF12121E) : Colors.grey.shade50,
+        hintText: hint,
+        hintStyle: TextStyle(color: Colors.grey.shade500, fontSize: 13),
+        suffixIcon: suffix,
+        filled: true,
+        fillColor: isDark ? const Color(0xFF12121E) : Colors.grey.shade50,
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         border: OutlineInputBorder(
@@ -1047,15 +1065,13 @@ class _Field extends StatelessWidget {
                 color: isDark ? Colors.grey.shade700 : Colors.grey.shade300)),
         focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(10),
-            borderSide:
-                const BorderSide(color: Colors.blueAccent, width: 1.8)),
+            borderSide: const BorderSide(color: Colors.blueAccent, width: 1.8)),
         errorBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(10),
             borderSide: const BorderSide(color: Colors.redAccent)),
         focusedErrorBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(10),
-            borderSide:
-                const BorderSide(color: Colors.redAccent, width: 1.8)),
+            borderSide: const BorderSide(color: Colors.redAccent, width: 1.8)),
       ),
       validator: validator,
     );
