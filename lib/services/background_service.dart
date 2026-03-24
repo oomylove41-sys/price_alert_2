@@ -56,6 +56,78 @@ Future<void> initBackgroundService() async {
   );
 }
 
+// ─── Pattern detection for one symbol + timeframe (top-level) ───────
+Future<void> _checkPatterns(
+  String symbol,
+  String timeframe,
+  SharedPreferences prefs,
+  ServiceInstance service,
+) async {
+  try {
+    final candles = await BinanceService.fetchCandles(symbol, timeframe);
+    if (candles.length < 4) return;
+
+    final hits = PatternService.detectOnLastClosed(candles);
+    if (hits.isEmpty) return;
+
+    for (final hit in hits) {
+      if (_shouldStop) return;
+
+      final key =
+          'PAT_${hit.pattern}_${symbol}_${timeframe}_${hit.price.toStringAsFixed(5)}';
+      if (prefs.getBool(key) ?? false) continue;
+
+      // Find pattern alerts that match this symbol and pattern
+      final matching = Config.patternAlerts.where((p) {
+        if (!p.isActive) return false;
+        if (p.symbol.toUpperCase() != symbol.toUpperCase()) return false;
+        if (!p.patterns.contains(hit.pattern)) return false;
+        if (p.timeframes.isNotEmpty && !p.timeframes.contains(timeframe))
+          return false;
+        return true;
+      }).toList();
+
+      bool anyOk = false;
+      for (final alert in matching) {
+        TelegramBot? bot;
+        try {
+          bot = Config.bots.firstWhere((b) => b.id == alert.botId);
+        } catch (_) {
+          bot = null;
+        }
+        if (bot == null || !bot.isConfigured) {
+          print(
+              '⚠️ No configured bot for pattern alert ${alert.id} — skipping');
+          continue;
+        }
+        final ok = await TelegramService.sendPatternAlert(
+          bot: bot,
+          pattern: hit.pattern,
+          symbol: symbol,
+          timeframe: timeframe,
+          price: hit.price,
+        );
+        if (ok) anyOk = true;
+      }
+
+      if (anyOk) {
+        await prefs.setBool(key, true);
+        service.invoke('alert', {
+          'symbol': symbol,
+          'type': hit.pattern,
+          'kind': 'pattern',
+          'price': hit.price,
+          'timeframe': timeframe,
+          'time': DateTime.now().toIso8601String(),
+        });
+        print('🔔 PATTERN $symbol ${hit.pattern} @ ${hit.price} ($timeframe)');
+      }
+    }
+  } catch (e) {
+    print('❌ Pattern check error on $symbol $timeframe: $e');
+  }
+}
+
 @pragma('vm:entry-point')
 Future<bool> onIosBackground(ServiceInstance service) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -201,79 +273,6 @@ Future<void> _checkHHLL(
   SharedPreferences prefs,
   ServiceInstance service,
 ) async {
-  // ─── Pattern detection for one symbol + timeframe ───────
-  Future<void> _checkPatterns(
-    String symbol,
-    String timeframe,
-    SharedPreferences prefs,
-    ServiceInstance service,
-  ) async {
-    try {
-      final candles = await BinanceService.fetchCandles(symbol, timeframe);
-      if (candles.length < 4) return;
-
-      final hits = PatternService.detectOnLastClosed(candles);
-      if (hits.isEmpty) return;
-
-      for (final hit in hits) {
-        if (_shouldStop) return;
-
-        final key =
-            'PAT_${hit.pattern}_${symbol}_${timeframe}_${hit.price.toStringAsFixed(5)}';
-        if (prefs.getBool(key) ?? false) continue;
-
-        // Find pattern alerts that match this symbol and pattern
-        final matching = Config.patternAlerts.where((p) {
-          if (!p.isActive) return false;
-          if (p.symbol.toUpperCase() != symbol.toUpperCase()) return false;
-          if (!p.patterns.contains(hit.pattern)) return false;
-          if (p.timeframes.isNotEmpty && !p.timeframes.contains(timeframe))
-            return false;
-          return true;
-        }).toList();
-
-        bool anyOk = false;
-        for (final alert in matching) {
-          TelegramBot? bot;
-          try {
-            bot = Config.bots.firstWhere((b) => b.id == alert.botId);
-          } catch (_) {
-            bot = null;
-          }
-          if (bot == null || !bot.isConfigured) {
-            print(
-                '⚠️ No configured bot for pattern alert ${alert.id} — skipping');
-            continue;
-          }
-          final ok = await TelegramService.sendPatternAlert(
-            bot: bot,
-            pattern: hit.pattern,
-            symbol: symbol,
-            timeframe: timeframe,
-            price: hit.price,
-          );
-          if (ok) anyOk = true;
-        }
-
-        if (anyOk) {
-          await prefs.setBool(key, true);
-          service.invoke('alert', {
-            'symbol': symbol,
-            'type': hit.pattern,
-            'kind': 'pattern',
-            'price': hit.price,
-            'timeframe': timeframe,
-            'time': DateTime.now().toIso8601String(),
-          });
-          print(
-              '🔔 PATTERN $symbol ${hit.pattern} @ ${hit.price} ($timeframe)');
-        }
-      }
-    } catch (e) {
-      print('❌ Pattern check error on $symbol $timeframe: $e');
-    }
-  }
-
   try {
     final candles = await BinanceService.fetchCandles(symbol, timeframe);
     if (candles.length < 2) return;
