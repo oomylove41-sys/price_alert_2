@@ -1,8 +1,9 @@
 // ─── services/background_service.dart ───────────────────
-// Background bot. Three alert types run each tick:
-//   1. HIT  — price touches an existing HH/LL level
-//   2. NEW  — a fresh HH/LL pivot is formed
-//   3. PRICE ALERT — price crosses a manually set level
+// Background bot. Four alert types run each tick:
+//   1. HIT            — price touches an existing HH/LL level
+//   2. NEW            — a fresh HH/LL pivot is formed
+//   3. PRICE ALERT    — price crosses a manually set level
+//   4. CANDLE PATTERN — BE / MS / ES pattern detected on closed candle
 
 import 'dart:async';
 import 'dart:convert';
@@ -12,6 +13,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import 'binance_service.dart';
+import 'candle_pattern_service.dart';
 import 'pivot_service.dart';
 import 'telegram_service.dart';
 
@@ -76,7 +78,8 @@ void onBackgroundStart(ServiceInstance service) async {
       'TFs: ${Config.effectiveTimeframes} | '
       'every ${Config.checkEveryMinutes}m | '
       '${Config.bots.length} bot(s) | '
-      '${Config.priceAlerts.length} price alert(s)');
+      '${Config.priceAlerts.length} price alert(s) | '
+      '${Config.candlePatternAlerts.length} candle pattern alert(s)');
 
   // ── Stop ────────────────────────────────────────────────
   service.on('stop').listen((event) {
@@ -106,6 +109,14 @@ void onBackgroundStart(ServiceInstance service) async {
             .toList();
       } catch (e) { print('⚠️ PriceAlerts parse error: $e'); }
     }
+    if (data['candlePatternAlerts'] != null) {
+      try {
+        Config.candlePatternAlerts = (data['candlePatternAlerts'] as List)
+            .map((j) => CandlePatternAlert.fromJson(
+                Map<String, dynamic>.from(j as Map)))
+            .toList();
+      } catch (e) { print('⚠️ CandlePatternAlerts parse error: $e'); }
+    }
     if (data['symbols']  != null) Config.symbols   = List<String>.from(data['symbols']  as List);
     if (data['pivotLen'] != null) Config.pivotLen   = data['pivotLen'] as int;
     if (data['limit']    != null) Config.limit      = data['limit']    as int;
@@ -117,7 +128,8 @@ void onBackgroundStart(ServiceInstance service) async {
       }
     }
     print('🔄 Config updated | TFs: ${Config.effectiveTimeframes} | '
-        '${Config.priceAlerts.length} price alert(s)');
+        '${Config.priceAlerts.length} price alert(s) | '
+        '${Config.candlePatternAlerts.length} candle pattern alert(s)');
   });
 
   await _runAllChecks(service);
@@ -172,6 +184,9 @@ Future<void> _runAllChecks(ServiceInstance service) async {
 
     // ── Manual price alerts ──────────────────────────────
     await _checkPriceAlerts(prefs, service);
+
+    // ── Candle pattern alerts ────────────────────────────
+    await _checkCandlePatternAlerts(prefs, service);
 
   } catch (e) {
     print('❌ Error in _runAllChecks: $e');
@@ -325,5 +340,112 @@ Future<void> _checkPriceAlerts(
   // Persist updated triggered state back to SharedPreferences
   if (anyTriggered) {
     await ConfigService.savePriceAlertsFromBackground(prefs);
+  }
+}
+
+// ─── Candle pattern alert check ───────────────────────────
+// Groups alerts by symbol+timeframe to fetch candles only once
+// per unique pair, then runs pattern detection on each.
+// Dedup key: CP_<PATTERN>_<SYMBOL>_<TF>_<candleTimestamp>
+// so the same closed candle only fires once per alert.
+Future<void> _checkCandlePatternAlerts(
+    SharedPreferences prefs, ServiceInstance service) async {
+  final active = Config.candlePatternAlerts
+      .where((a) => a.shouldCheck)
+      .toList();
+  if (active.isEmpty) return;
+
+  print('🕯 Checking ${active.length} candle pattern alert(s)...');
+
+  // Build a map of unique symbol+timeframe combinations
+  final Map<String, List<CandlePatternAlert>> bySymbolTf = {};
+  for (final alert in active) {
+    final key = '${alert.symbol}_${alert.timeframe}';
+    bySymbolTf.putIfAbsent(key, () => []).add(alert);
+  }
+
+  for (final entry in bySymbolTf.entries) {
+    if (_shouldStop) break;
+
+    final parts     = entry.key.split('_');
+    // symbol can contain underscores? No — Binance symbols are alphanumeric.
+    // But to be safe, split only on the last underscore (timeframe).
+    final alertsForPair = entry.value;
+    final symbol    = alertsForPair.first.symbol;
+    final timeframe = alertsForPair.first.timeframe;
+
+    List<Candle> candles;
+    try {
+      candles = await BinanceService.fetchCandles(symbol, timeframe);
+    } catch (e) {
+      print('❌ Candle fetch failed for $symbol $timeframe: $e');
+      continue;
+    }
+
+    if (candles.length < 7) continue; // not enough data
+
+    final signalTime = CandlePatternService.signalCandleTime(candles);
+    if (signalTime == null) continue;
+    // Use seconds-precision epoch in dedup key to keep it compact
+    final candleTs = (signalTime.millisecondsSinceEpoch ~/ 1000).toString();
+    final livePrice = candles.last.close;
+
+    for (final alert in alertsForPair) {
+      if (_shouldStop) break;
+
+      final patternEnum = CandlePatternExt.fromString(alert.pattern);
+
+      // Dedup key: unique per pattern + symbol + timeframe + closed candle time
+      final dedupKey =
+          'CP_${alert.pattern}_${symbol}_${timeframe}_$candleTs';
+      if (prefs.getBool(dedupKey) ?? false) continue;
+
+      final detected = CandlePatternService.detect(candles, patternEnum);
+      if (!detected) continue;
+
+      // Resolve bot
+      TelegramBot? bot;
+      try {
+        bot = Config.bots.firstWhere((b) => b.id == alert.botId);
+      } catch (_) {
+        try {
+          bot = Config.bots.firstWhere((b) => b.isConfigured);
+        } catch (_) { /* none */ }
+      }
+
+      if (bot == null || !bot.isConfigured) {
+        print('⚠️ No configured bot for candle pattern alert '
+            '"${alert.label.isNotEmpty ? alert.label : alert.symbol}" — skipping');
+        // Mark dedup so we don't spam the log
+        await prefs.setBool(dedupKey, true);
+        continue;
+      }
+
+      final ok = await TelegramService.sendCandlePatternAlert(
+        bot:        bot,
+        alert:      alert,
+        livePrice:  livePrice,
+        signalTime: signalTime,
+      );
+
+      // Always set dedup key to avoid re-alerting the same candle
+      await prefs.setBool(dedupKey, true);
+
+      if (ok) {
+        service.invoke('candlePatternAlert', {
+          'id':        alert.id,
+          'symbol':    symbol,
+          'pattern':   alert.pattern,
+          'timeframe': timeframe,
+          'label':     alert.label,
+          'price':     livePrice,
+          'time':      DateTime.now().toIso8601String(),
+        });
+        print('🕯 CANDLE PATTERN: ${alert.pattern} on $symbol $timeframe '
+            '@ ${livePrice.toStringAsFixed(5)}');
+      } else {
+        print('❌ Candle pattern alert send failed for $symbol $timeframe');
+      }
+    }
   }
 }

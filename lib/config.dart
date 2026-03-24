@@ -1,7 +1,7 @@
 // ─── config.dart ────────────────────────────────────────
 // Runtime-editable config. Supports multiple Telegram bots
 // with per-bot per-alert-type timeframe selection,
-// plus manual price alerts.
+// plus manual price alerts and candle pattern alerts.
 
 import 'dart:convert';
 import 'package:flutter_background_service/flutter_background_service.dart';
@@ -171,15 +171,87 @@ class PriceAlert {
 }
 
 // ══════════════════════════════════════════════════════════
+// ─── CANDLE PATTERN ALERT ────────────────────────────────
+// ══════════════════════════════════════════════════════════
+class CandlePatternAlert {
+  final String id;
+  String symbol;
+
+  /// Pattern code: 'BE' | 'MS' | 'ES'
+  String pattern;
+
+  /// Timeframe to watch (e.g. '1h', '4h', '1d')
+  String timeframe;
+
+  /// Which TelegramBot to use
+  String botId;
+
+  /// Optional user-friendly label
+  String label;
+
+  bool isActive;
+  final DateTime createdAt;
+
+  CandlePatternAlert({
+    required this.id,
+    required this.symbol,
+    required this.pattern,
+    required this.timeframe,
+    required this.botId,
+    this.label    = '',
+    this.isActive = true,
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
+
+  bool get shouldCheck => isActive;
+
+  CandlePatternAlert copyWith({
+    String? symbol, String? pattern, String? timeframe,
+    String? botId, String? label, bool? isActive,
+  }) => CandlePatternAlert(
+    id:        id,
+    symbol:    symbol    ?? this.symbol,
+    pattern:   pattern   ?? this.pattern,
+    timeframe: timeframe ?? this.timeframe,
+    botId:     botId     ?? this.botId,
+    label:     label     ?? this.label,
+    isActive:  isActive  ?? this.isActive,
+    createdAt: createdAt,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id, 'symbol': symbol, 'pattern': pattern,
+    'timeframe': timeframe, 'botId': botId, 'label': label,
+    'isActive': isActive, 'createdAt': createdAt.toIso8601String(),
+  };
+
+  factory CandlePatternAlert.fromJson(Map<String, dynamic> j) =>
+      CandlePatternAlert(
+        id:        j['id']        as String? ?? _genId(),
+        symbol:    j['symbol']    as String,
+        pattern:   j['pattern']   as String,
+        timeframe: j['timeframe'] as String,
+        botId:     j['botId']     as String,
+        label:     j['label']     as String? ?? '',
+        isActive:  j['isActive']  as bool?   ?? true,
+        createdAt: DateTime.tryParse(j['createdAt'] as String? ?? '')
+                   ?? DateTime.now(),
+      );
+
+  static String _genId() => DateTime.now().microsecondsSinceEpoch.toString();
+}
+
+// ══════════════════════════════════════════════════════════
 // ─── CONFIG ──────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════
 class Config {
-  static List<TelegramBot> bots        = [_defaultBot()];
-  static List<String>      symbols     = ['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT'];
-  static int               pivotLen    = 5;
-  static int               limit       = 1000;
-  static int               checkEveryMinutes = 5;
-  static List<PriceAlert>  priceAlerts = [];
+  static List<TelegramBot>        bots                 = [_defaultBot()];
+  static List<String>             symbols              = ['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT'];
+  static int                      pivotLen             = 5;
+  static int                      limit                = 1000;
+  static int                      checkEveryMinutes    = 5;
+  static List<PriceAlert>         priceAlerts          = [];
+  static List<CandlePatternAlert> candlePatternAlerts  = [];
 
   static List<String> get effectiveTimeframes {
     final Set<String> all = {};
@@ -203,14 +275,15 @@ TelegramBot _defaultBot() => TelegramBot(
 // ─── CONFIG SERVICE ──────────────────────────────────────
 // ══════════════════════════════════════════════════════════
 class ConfigService {
-  static const _kBotsV2      = 'cfg_bots_v2';
-  static const _kBotToken    = 'cfg_bot_token';   // legacy
-  static const _kChatId      = 'cfg_chat_id';     // legacy
-  static const _kSymbols     = 'cfg_symbols';
-  static const _kPivotLen    = 'cfg_pivot_len';
-  static const _kLimit       = 'cfg_limit';
-  static const _kCheckEvery  = 'cfg_check_every';
-  static const _kPriceAlerts = 'cfg_price_alerts_v1';
+  static const _kBotsV2             = 'cfg_bots_v2';
+  static const _kBotToken           = 'cfg_bot_token';   // legacy
+  static const _kChatId             = 'cfg_chat_id';     // legacy
+  static const _kSymbols            = 'cfg_symbols';
+  static const _kPivotLen           = 'cfg_pivot_len';
+  static const _kLimit              = 'cfg_limit';
+  static const _kCheckEvery         = 'cfg_check_every';
+  static const _kPriceAlerts        = 'cfg_price_alerts_v1';
+  static const _kCandlePatternAlerts = 'cfg_candle_pattern_alerts_v1';
 
   static Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -250,6 +323,18 @@ class ConfigService {
       } catch (_) { Config.priceAlerts = []; }
     }
 
+    // ── Candle Pattern Alerts ─────────────────────────────
+    final cpAlertsStr = prefs.getString(_kCandlePatternAlerts);
+    if (cpAlertsStr != null && cpAlertsStr.isNotEmpty) {
+      try {
+        final list = jsonDecode(cpAlertsStr) as List;
+        Config.candlePatternAlerts = list
+            .map((j) => CandlePatternAlert.fromJson(
+                Map<String, dynamic>.from(j as Map)))
+            .toList();
+      } catch (_) { Config.candlePatternAlerts = []; }
+    }
+
     Config.symbols           = prefs.getStringList(_kSymbols) ?? Config.symbols;
     Config.pivotLen          = prefs.getInt(_kPivotLen)       ?? Config.pivotLen;
     Config.limit             = prefs.getInt(_kLimit)          ?? Config.limit;
@@ -260,12 +345,13 @@ class ConfigService {
     final svc = FlutterBackgroundService();
     if (!await svc.isRunning()) return;
     svc.invoke('updateConfig', {
-      'bots':              Config.bots.map((b) => b.toJson()).toList(),
-      'symbols':           Config.symbols,
-      'pivotLen':          Config.pivotLen,
-      'limit':             Config.limit,
-      'checkEveryMinutes': Config.checkEveryMinutes,
-      'priceAlerts':       Config.priceAlerts.map((a) => a.toJson()).toList(),
+      'bots':                 Config.bots.map((b) => b.toJson()).toList(),
+      'symbols':              Config.symbols,
+      'pivotLen':             Config.pivotLen,
+      'limit':                Config.limit,
+      'checkEveryMinutes':    Config.checkEveryMinutes,
+      'priceAlerts':          Config.priceAlerts.map((a) => a.toJson()).toList(),
+      'candlePatternAlerts':  Config.candlePatternAlerts.map((a) => a.toJson()).toList(),
     });
   }
 
@@ -277,10 +363,17 @@ class ConfigService {
       prefs.setString(_kPriceAlerts,
           jsonEncode(Config.priceAlerts.map((a) => a.toJson()).toList()));
 
+  static Future<void> _persistCandlePatternAlerts(SharedPreferences prefs) async =>
+      prefs.setString(_kCandlePatternAlerts,
+          jsonEncode(Config.candlePatternAlerts.map((a) => a.toJson()).toList()));
+
   static Future<void> _clearAllDedupKeys() async {
     final prefs = await SharedPreferences.getInstance();
     final stale = prefs.getKeys()
-        .where((k) => k.startsWith('HH_') || k.startsWith('LL_'))
+        .where((k) =>
+            k.startsWith('HH_') ||
+            k.startsWith('LL_') ||
+            k.startsWith('CP_'))
         .toList();
     for (final k in stale) await prefs.remove(k);
     print('🧹 Cleared ${stale.length} dedup keys');
@@ -328,5 +421,20 @@ class ConfigService {
   static Future<void> savePriceAlertsFromBackground(
       SharedPreferences prefs) async {
     await _persistAlerts(prefs);
+  }
+
+  /// Called from the main isolate — saves + pushes to background.
+  static Future<void> saveCandlePatternAlerts(
+      List<CandlePatternAlert> alerts) async {
+    final prefs = await SharedPreferences.getInstance();
+    Config.candlePatternAlerts = List.from(alerts);
+    await _persistCandlePatternAlerts(prefs);
+    await _pushToBackground();
+  }
+
+  /// Called from the BACKGROUND isolate — saves directly, no push.
+  static Future<void> saveCandlePatternAlertsFromBackground(
+      SharedPreferences prefs) async {
+    await _persistCandlePatternAlerts(prefs);
   }
 }

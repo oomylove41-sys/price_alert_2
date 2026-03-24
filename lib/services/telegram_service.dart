@@ -1,10 +1,11 @@
 // ─── services/telegram_service.dart ─────────────────────
-// Sends HH/LL and manual price alerts to Telegram.
-// Each method routes to the correct bot(s).
+// Sends HH/LL, manual price alerts, and candle pattern alerts
+// to Telegram. Each method routes to the correct bot(s).
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config.dart';
+import 'candle_pattern_service.dart';
 
 class TelegramService {
   static const String _baseUrl = 'https://api.telegram.org/bot';
@@ -121,6 +122,54 @@ class TelegramService {
         '🎯 <b>Target:</b>  <code>${alert.targetPrice.toStringAsFixed(5)}</code>\n'
         '💰 <b>Current:</b> <code>${currentPrice.toStringAsFixed(5)}</code>\n'
         '📌 <b>Signal:</b>  $signal\n';
+
+    return _sendToBot(bot, msg);
+  }
+
+  // ──────────────────────────────────────────────────────
+  // ALERT TYPE 4: CANDLE PATTERN — BE / MS / ES detected
+  // Sends to the specific bot chosen by the user for the alert.
+  // ──────────────────────────────────────────────────────
+  static Future<bool> sendCandlePatternAlert({
+    required TelegramBot        bot,
+    required CandlePatternAlert alert,
+    required double             livePrice,
+    required DateTime           signalTime,
+  }) async {
+    if (!bot.isConfigured) return false;
+
+    final patternEnum = CandlePatternExt.fromString(alert.pattern);
+    final tfName      = _tfNames[alert.timeframe] ?? alert.timeframe;
+    final dispLabel   = alert.label.isNotEmpty
+        ? alert.label
+        : '${alert.symbol} — ${patternEnum.label}';
+
+    final String directionNote;
+    switch (patternEnum) {
+      case CandlePattern.BE:
+        directionNote = 'Bullish reversal signal — potential upside ↑';
+        break;
+      case CandlePattern.MS:
+        directionNote = 'Bullish reversal signal — potential upside ↑';
+        break;
+      case CandlePattern.ES:
+        directionNote = 'Bearish reversal signal — potential downside ↓';
+        break;
+    }
+
+    final timeStr =
+        '${signalTime.hour.toString().padLeft(2, '0')}:'
+        '${signalTime.minute.toString().padLeft(2, '0')}';
+
+    final msg =
+        '${patternEnum.emoji} <b>${patternEnum.label} Detected!</b>\n\n'
+        '🏷 <b>Alert:</b>      $dispLabel\n'
+        '📊 <b>Symbol:</b>     ${alert.symbol}\n'
+        '⏱ <b>Timeframe:</b>  $tfName\n'
+        '🕯 <b>Pattern:</b>    ${patternEnum.label} (${patternEnum.shortLabel})\n'
+        '💰 <b>Price:</b>      <code>${livePrice.toStringAsFixed(5)}</code>\n'
+        '🕐 <b>Signal bar:</b> $timeStr\n'
+        '📌 <b>Signal:</b>     $directionNote\n';
 
     return _sendToBot(bot, msg);
   }

@@ -1,7 +1,7 @@
 // ─── screens/main_shell.dart ─────────────────────────────
 // Root widget with:
 //   • 4-tab BottomNavigationBar (Home, Pairs, Indicator, Bot)
-//   • Left hamburger drawer → Price Alerts page
+//   • Left hamburger drawer → Price Alerts + Candle Pattern Alerts
 //   • Right AppBar icon → Telegram Bots sheet
 
 import 'package:flutter/material.dart';
@@ -9,6 +9,7 @@ import '../config.dart';
 import 'home_screen.dart';
 import 'settings_screen.dart';
 import 'price_alerts_screen.dart';
+import 'candle_pattern_alerts_screen.dart';
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
@@ -65,10 +66,15 @@ class _MainShellState extends State<MainShell> {
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const PriceAlertsScreen()),
-    ).then((_) {
-      // Reload state in case alerts changed
-      setState(() {});
-    });
+    ).then((_) => setState(() {}));
+  }
+
+  void _openCandlePatternAlerts() {
+    Navigator.pop(context); // close drawer first
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const CandlePatternAlertsScreen()),
+    ).then((_) => setState(() {}));
   }
 
   @override
@@ -84,7 +90,10 @@ class _MainShellState extends State<MainShell> {
 
     return Scaffold(
       // ── Drawer (hamburger) ──────────────────────────────
-      drawer: _AppDrawer(onPriceAlerts: _openPriceAlerts),
+      drawer: _AppDrawer(
+        onPriceAlerts:         _openPriceAlerts,
+        onCandlePatternAlerts: _openCandlePatternAlerts,
+      ),
 
       // ── AppBar ──────────────────────────────────────────
       appBar: AppBar(
@@ -133,11 +142,16 @@ class _TabItem {
 }
 
 // ══════════════════════════════════════════════════════════
-// ─── DRAWER ──────────────────────────────────────────────
+// ─── DRAWER ──────────────────────────────────════════════
 // ══════════════════════════════════════════════════════════
 class _AppDrawer extends StatelessWidget {
   final VoidCallback onPriceAlerts;
-  const _AppDrawer({required this.onPriceAlerts});
+  final VoidCallback onCandlePatternAlerts;
+
+  const _AppDrawer({
+    required this.onPriceAlerts,
+    required this.onCandlePatternAlerts,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -146,6 +160,9 @@ class _AppDrawer extends StatelessWidget {
     final drawerBg     = isDark ? const Color(0xFF15152A) : Colors.white;
     final activeAlerts = Config.priceAlerts.where((a) => a.shouldFire).length;
     final triggered    = Config.priceAlerts.where((a) => a.isTriggered).length;
+    final activeCpAlerts = Config.candlePatternAlerts
+        .where((a) => a.isActive)
+        .length;
 
     return Drawer(
       backgroundColor: drawerBg,
@@ -192,17 +209,39 @@ class _AppDrawer extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 8),
               children: [
 
-                // Price Alerts
+                // ── Price Alerts ──────────────────────────
                 _DrawerItem(
-                  icon:     Icons.notifications_rounded,
-                  label:    'Price Alerts',
-                  badge:    activeAlerts > 0 ? '$activeAlerts active' : null,
+                  icon:       Icons.notifications_rounded,
+                  label:      'Price Alerts',
+                  badge:      activeAlerts > 0
+                      ? '$activeAlerts active'
+                      : null,
                   badgeColor: Colors.blueAccent,
-                  sub:      triggered > 0
+                  sub:        triggered > 0
                       ? '$triggered triggered'
                       : 'Set custom price targets',
-                  subColor: triggered > 0 ? Colors.orange : null,
-                  onTap:    onPriceAlerts,
+                  subColor:   triggered > 0 ? Colors.orange : null,
+                  onTap:      onPriceAlerts,
+                ),
+
+                Divider(
+                  height: 1,
+                  indent: 16, endIndent: 16,
+                  color: isDark
+                      ? Colors.grey.shade800
+                      : Colors.grey.shade200,
+                ),
+
+                // ── Candle Pattern Alerts ─────────────────
+                _DrawerItem(
+                  icon:       Icons.candlestick_chart_rounded,
+                  label:      'Candle Patterns',
+                  badge:      activeCpAlerts > 0
+                      ? '$activeCpAlerts active'
+                      : null,
+                  badgeColor: Colors.teal,
+                  sub:        'BE · MS · ES detection',
+                  onTap:      onCandlePatternAlerts,
                 ),
 
                 Divider(
@@ -215,8 +254,7 @@ class _AppDrawer extends StatelessWidget {
 
                 // Info section
                 Padding(
-                  padding:
-                      const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                   child: Text('More features coming soon',
                       style: TextStyle(
                           fontSize: 11,
@@ -323,8 +361,8 @@ class _TelegramBotsSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark      = Theme.of(context).brightness == Brightness.dark;
-    final sheetColor  = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+    final isDark     = Theme.of(context).brightness == Brightness.dark;
+    final sheetColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
 
     return DraggableScrollableSheet(
       initialChildSize: 0.92,
