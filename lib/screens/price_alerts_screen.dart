@@ -14,7 +14,8 @@ import '../services/telegram_service.dart';
 // ─── MAIN SCREEN ─────────────────────────────────────────
 // ══════════════════════════════════════════════════════════
 class PriceAlertsScreen extends StatefulWidget {
-  const PriceAlertsScreen({super.key});
+  final bool patternsOnly;
+  const PriceAlertsScreen({super.key, this.patternsOnly = false});
 
   @override
   State<PriceAlertsScreen> createState() => _PriceAlertsScreenState();
@@ -189,43 +190,46 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
         foregroundColor: isDark ? Colors.white : Colors.black,
         elevation: 0,
         actions: [
-          // Add Price Alert
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: TextButton.icon(
-              onPressed: () => _openEdit(null),
-              icon: const Icon(Icons.add_rounded, size: 18),
-              label: const Text('Add'),
-              style: TextButton.styleFrom(foregroundColor: Colors.blueAccent),
+          if (!widget.patternsOnly)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: TextButton.icon(
+                onPressed: () => _openEdit(null),
+                icon: const Icon(Icons.add_rounded, size: 18),
+                label: const Text('Add'),
+                style: TextButton.styleFrom(foregroundColor: Colors.blueAccent),
+              ),
             ),
-          ),
-          // Add Pattern Alert
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: TextButton.icon(
-              onPressed: () => _openPatternEdit(null),
-              icon: const Icon(Icons.auto_graph, size: 18),
-              label: const Text('Pattern'),
-              style: TextButton.styleFrom(foregroundColor: Colors.blueAccent),
-            ),
-          ),
         ],
       ),
       body: (_alerts.isEmpty && _patterns.isEmpty)
           ? _buildEmpty()
           : _buildList(isDark),
-      floatingActionButton: (_alerts.isEmpty && _patterns.isEmpty)
+      floatingActionButton: widget.patternsOnly
           ? null
-          : FloatingActionButton(
-              onPressed: () => _openEdit(null),
-              backgroundColor: Colors.blueAccent,
-              foregroundColor: Colors.white,
-              child: const Icon(Icons.add_rounded),
-            ),
+          : ((_alerts.isEmpty && _patterns.isEmpty)
+              ? null
+              : FloatingActionButton(
+                  onPressed: () => _openEdit(null),
+                  backgroundColor: Colors.blueAccent,
+                  foregroundColor: Colors.white,
+                  child: const Icon(Icons.add_rounded),
+                )),
     );
   }
 
   Widget _buildEmpty() {
+    final emptyMsg =
+        widget.patternsOnly ? 'No pattern alerts yet' : 'No price alerts yet';
+    final emptySubtitle = widget.patternsOnly
+        ? 'Patterns will be detected when conditions match'
+        : 'Tap the button below to add your first alert.';
+    final buttonLabel =
+        widget.patternsOnly ? 'Add Pattern Alert' : 'Add Price Alert';
+    final onAddPressed = widget.patternsOnly
+        ? (() => _openPatternEdit(null))
+        : (() => _openEdit(null));
+
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -233,18 +237,19 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
           Icon(Icons.notifications_none_rounded,
               size: 64, color: Colors.grey.shade400),
           const SizedBox(height: 16),
-          const Text('No price alerts yet',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          Text(emptyMsg,
+              style:
+                  const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Text(
-            'Tap the button below to add your first alert.',
+            emptySubtitle,
             style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
           ),
           const SizedBox(height: 32),
           ElevatedButton.icon(
-            onPressed: () => _openEdit(null),
+            onPressed: onAddPressed,
             icon: const Icon(Icons.add_rounded),
-            label: const Text('Add Price Alert'),
+            label: Text(buttonLabel),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.blueAccent,
               foregroundColor: Colors.white,
@@ -259,6 +264,26 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
   }
 
   Widget _buildList(bool isDark) {
+    // If patterns-only mode, show only pattern alerts
+    if (widget.patternsOnly) {
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+        children: [
+          if (_patterns.isNotEmpty) ...[
+            _SectionLabel('Patterns (${_patterns.length})'),
+            ..._patterns.map((p) => _PatternCard(
+                  alert: p,
+                  isDark: isDark,
+                  onEdit: () => _openPatternEdit(p),
+                  onToggle: () => _togglePatternActive(p),
+                  onDelete: () => _deletePattern(p),
+                )),
+          ],
+        ],
+      );
+    }
+
+    // Otherwise show price alerts + patterns section below
     // Group: active alerts first, then triggered, then paused
     final active = _alerts.where((a) => a.isActive && !a.isTriggered).toList();
     final triggered = _alerts.where((a) => a.isTriggered).toList();

@@ -214,7 +214,8 @@ class _AppDrawer extends StatelessWidget {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                          builder: (_) => const PriceAlertsScreen()),
+                          builder: (_) =>
+                              const PriceAlertsScreen(patternsOnly: true)),
                     );
                   },
                 ),
