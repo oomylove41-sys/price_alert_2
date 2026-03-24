@@ -1,54 +1,225 @@
 // ─── config.dart ────────────────────────────────────────
-// Runtime-editable config. Values load from SharedPreferences
-// on app start; defaults are used if no saved value exists.
+// Runtime-editable config. Supports multiple Telegram bots
+// with per-bot per-alert-type timeframe selection,
+// plus manual price alerts.
 
+import 'dart:convert';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-class Config {
-  // ─── TELEGRAM ─────────────────────────────────────────
-  static String botToken = 'YOUR_TELEGRAM_BOT_TOKEN';
-  static String chatId   = 'YOUR_TELEGRAM_CHAT_ID';
+const List<String> kAllTimeframes = [
+  '1m','3m','5m','15m','30m',
+  '1h','2h','4h','6h','8h','12h',
+  '1d','3d','1w','1M',
+];
 
-  // ─── TRADING PAIRS ────────────────────────────────────
-  static List<String> symbols = [
-    'BTCUSDT',
-    'ETHUSDT',
-    'SOLUSDT',
-    'XRPUSDT',
-  ];
+// ══════════════════════════════════════════════════════════
+// ─── TELEGRAM BOT ────────────────────────────────────────
+// ══════════════════════════════════════════════════════════
+class TelegramBot {
+  final String id;
+  String name;
+  String token;
+  String chatId;
+  List<String> hitTimeframes;
+  List<String> newTimeframes;
 
-  // ─── TIMEFRAMES ───────────────────────────────────────
-  static List<String> timeframes = ['30m', '1h'];
+  /// Whether this bot can be selected for manual price alerts.
+  bool canReceiveManualAlerts;
 
-  // ─── INDICATOR SETTINGS ───────────────────────────────
-  static int pivotLen = 5;
-  static int limit    = 1000;
+  TelegramBot({
+    required this.id,
+    required this.name,
+    required this.token,
+    required this.chatId,
+    List<String>? hitTimeframes,
+    List<String>? newTimeframes,
+    this.canReceiveManualAlerts = false,
+  })  : hitTimeframes = hitTimeframes ?? [],
+        newTimeframes = newTimeframes ?? [];
 
-  // ─── BOT SETTINGS ─────────────────────────────────────
-  static int checkEveryMinutes = 5;
+  bool get alertOnHit => hitTimeframes.isNotEmpty;
+  bool get alertOnNew => newTimeframes.isNotEmpty;
+  bool get isConfigured =>
+      token.isNotEmpty &&
+      token != 'YOUR_TELEGRAM_BOT_TOKEN' &&
+      chatId.isNotEmpty &&
+      chatId != 'YOUR_TELEGRAM_CHAT_ID';
 
-  // ─── CANDLESTICK PATTERN SETTINGS ─────────────────────
-  static bool   patternBE          = true;   // Bullish Engulfing
-  static bool   patternMS          = true;   // Morning Star
-  static bool   patternES          = true;   // Evening Star
-  static bool   patternRequireTrend = true;  // Require prior trend
-  static double patternStarBodyPct  = 30.0;  // Star max body % of range (5–50)
-  static double patternRecoveryPct  = 50.0;  // MS/ES recovery % into C1 body (20–80)
+  TelegramBot copyWith({
+    String? name, String? token, String? chatId,
+    List<String>? hitTimeframes, List<String>? newTimeframes,
+    bool? canReceiveManualAlerts,
+  }) => TelegramBot(
+    id: id,
+    name:                   name                   ?? this.name,
+    token:                  token                  ?? this.token,
+    chatId:                 chatId                 ?? this.chatId,
+    hitTimeframes:          hitTimeframes          ?? List.from(this.hitTimeframes),
+    newTimeframes:          newTimeframes          ?? List.from(this.newTimeframes),
+    canReceiveManualAlerts: canReceiveManualAlerts ?? this.canReceiveManualAlerts,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id, 'name': name, 'token': token, 'chatId': chatId,
+    'hitTimeframes': hitTimeframes, 'newTimeframes': newTimeframes,
+    'canReceiveManualAlerts': canReceiveManualAlerts,
+  };
+
+  factory TelegramBot.fromJson(Map<String, dynamic> j) {
+    List<String> parseTfList(dynamic raw, bool fallback) =>
+        raw is List ? List<String>.from(raw) : (fallback ? ['30m','1h'] : []);
+    return TelegramBot(
+      id:            j['id']    as String? ?? _genId(),
+      name:          j['name']  as String? ?? 'Bot',
+      token:         j['token'] as String? ?? '',
+      chatId:        j['chatId'] as String? ?? '',
+      hitTimeframes: parseTfList(j['hitTimeframes'], j['alertOnHit'] as bool? ?? true),
+      newTimeframes: parseTfList(j['newTimeframes'], j['alertOnNew'] as bool? ?? false),
+      canReceiveManualAlerts: j['canReceiveManualAlerts'] as bool? ?? false,
+    );
+  }
+
+  static String _genId() => DateTime.now().millisecondsSinceEpoch.toString();
 }
 
-// ─── CONFIG SERVICE ──────────────────────────────────────
-class ConfigService {
-  // HH/LL keys
-  static const _kBotToken   = 'cfg_bot_token';
-  static const _kChatId     = 'cfg_chat_id';
-  static const _kSymbols    = 'cfg_symbols';
-  static const _kTimeframes = 'cfg_timeframes';
-  static const _kPivotLen   = 'cfg_pivot_len';
-  static const _kLimit      = 'cfg_limit';
-  static const _kCheckEvery = 'cfg_check_every';
+// ══════════════════════════════════════════════════════════
+// ─── PRICE ALERT ─────────────────────────────────────════
+// ══════════════════════════════════════════════════════════
+class PriceAlert {
+  final String id;
+  String symbol;
+  double targetPrice;
 
-  // Pattern keys
+  /// 'above' → alert when current price >= targetPrice
+  /// 'below' → alert when current price <= targetPrice
+  /// 'touch' → alert when current price is within 0.2% of targetPrice (either side)
+  String condition;
+
+  /// Which TelegramBot to use
+  String botId;
+
+  /// Optional user-friendly label
+  String label;
+
+  bool isActive;
+  bool isTriggered;
+  final DateTime createdAt;
+
+  PriceAlert({
+    required this.id,
+    required this.symbol,
+    required this.targetPrice,
+    required this.condition,
+    required this.botId,
+    this.label       = '',
+    this.isActive    = true,
+    this.isTriggered = false,
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
+
+  bool get shouldFire => isActive && !isTriggered;
+
+  bool matches(double currentPrice) {
+    switch (condition) {
+      case 'above': return currentPrice >= targetPrice;
+      case 'below': return currentPrice <= targetPrice;
+      case 'touch':
+        final pct = (currentPrice - targetPrice).abs() / targetPrice;
+        return pct <= 0.002;
+      default:      return false;
+    }
+  }
+
+  PriceAlert copyWith({
+    String? symbol, double? targetPrice, String? condition,
+    String? botId, String? label, bool? isActive, bool? isTriggered,
+  }) => PriceAlert(
+    id:          id,
+    symbol:      symbol      ?? this.symbol,
+    targetPrice: targetPrice ?? this.targetPrice,
+    condition:   condition   ?? this.condition,
+    botId:       botId       ?? this.botId,
+    label:       label       ?? this.label,
+    isActive:    isActive    ?? this.isActive,
+    isTriggered: isTriggered ?? this.isTriggered,
+    createdAt:   createdAt,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id, 'symbol': symbol, 'targetPrice': targetPrice,
+    'condition': condition, 'botId': botId, 'label': label,
+    'isActive': isActive, 'isTriggered': isTriggered,
+    'createdAt': createdAt.toIso8601String(),
+  };
+
+  factory PriceAlert.fromJson(Map<String, dynamic> j) => PriceAlert(
+    id:          j['id']          as String? ?? _genId(),
+    symbol:      j['symbol']      as String,
+    targetPrice: (j['targetPrice'] as num).toDouble(),
+    condition:   j['condition']   as String,
+    botId:       j['botId']       as String,
+    label:       j['label']       as String? ?? '',
+    isActive:    j['isActive']    as bool?   ?? true,
+    isTriggered: j['isTriggered'] as bool?   ?? false,
+    createdAt:   DateTime.tryParse(j['createdAt'] as String? ?? '')
+                 ?? DateTime.now(),
+  );
+
+  static String _genId() => DateTime.now().microsecondsSinceEpoch.toString();
+}
+
+// ══════════════════════════════════════════════════════════
+// ─── CONFIG ──────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════
+class Config {
+  static List<TelegramBot> bots        = [_defaultBot()];
+  static List<String>      symbols     = ['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT'];
+  static int               pivotLen    = 5;
+  static int               limit       = 1000;
+  static int               checkEveryMinutes = 5;
+  static List<PriceAlert>  priceAlerts = [];
+
+  // ─── NEW: Candlestick pattern settings ────────────────
+  static bool   patternBE           = true;
+  static bool   patternMS           = true;
+  static bool   patternES           = true;
+  static bool   patternRequireTrend = true;
+  static double patternStarBodyPct  = 30.0;
+  static double patternRecoveryPct  = 50.0;
+
+  static List<String> get effectiveTimeframes {
+    final Set<String> all = {};
+    for (final bot in bots) {
+      all.addAll(bot.hitTimeframes);
+      all.addAll(bot.newTimeframes);
+    }
+    return kAllTimeframes.where(all.contains).toList();
+  }
+}
+
+TelegramBot _defaultBot() => TelegramBot(
+  id: 'default', name: 'Main Bot',
+  token:  'YOUR_TELEGRAM_BOT_TOKEN',
+  chatId: 'YOUR_TELEGRAM_CHAT_ID',
+  hitTimeframes: ['30m', '1h'],
+  newTimeframes: [],
+);
+
+// ══════════════════════════════════════════════════════════
+// ─── CONFIG SERVICE ──────────────════════════════════════
+// ══════════════════════════════════════════════════════════
+class ConfigService {
+  static const _kBotsV2      = 'cfg_bots_v2';
+  static const _kBotToken    = 'cfg_bot_token';   // legacy
+  static const _kChatId      = 'cfg_chat_id';     // legacy
+  static const _kSymbols     = 'cfg_symbols';
+  static const _kPivotLen    = 'cfg_pivot_len';
+  static const _kLimit       = 'cfg_limit';
+  static const _kCheckEvery  = 'cfg_check_every';
+  static const _kPriceAlerts = 'cfg_price_alerts_v1';
+
+  // ─── NEW: pattern keys ────────────────────────────────
   static const _kPatternBE           = 'cfg_pattern_be';
   static const _kPatternMS           = 'cfg_pattern_ms';
   static const _kPatternES           = 'cfg_pattern_es';
@@ -56,41 +227,69 @@ class ConfigService {
   static const _kPatternStarBodyPct  = 'cfg_pattern_star_body_pct';
   static const _kPatternRecoveryPct  = 'cfg_pattern_recovery_pct';
 
-  // ─── Load from disk ───────────────────────────────────
   static Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
 
-    Config.botToken          = prefs.getString(_kBotToken)       ?? Config.botToken;
-    Config.chatId            = prefs.getString(_kChatId)         ?? Config.chatId;
-    Config.symbols           = prefs.getStringList(_kSymbols)    ?? Config.symbols;
-    Config.timeframes        = prefs.getStringList(_kTimeframes) ?? Config.timeframes;
-    Config.pivotLen          = prefs.getInt(_kPivotLen)          ?? Config.pivotLen;
-    Config.limit             = prefs.getInt(_kLimit)             ?? Config.limit;
-    Config.checkEveryMinutes = prefs.getInt(_kCheckEvery)        ?? Config.checkEveryMinutes;
+    // ── Bots ──────────────────────────────────────────────
+    final botsStr = prefs.getString(_kBotsV2);
+    if (botsStr != null && botsStr.isNotEmpty) {
+      try {
+        final list = jsonDecode(botsStr) as List;
+        final bots = list
+            .map((j) => TelegramBot.fromJson(Map<String, dynamic>.from(j as Map)))
+            .toList();
+        Config.bots = bots.isNotEmpty ? bots : [_defaultBot()];
+      } catch (_) { Config.bots = [_defaultBot()]; }
+    } else {
+      final oldToken  = prefs.getString(_kBotToken);
+      final oldChatId = prefs.getString(_kChatId);
+      if (oldToken != null && oldToken.isNotEmpty) {
+        Config.bots = [TelegramBot(
+          id: 'migrated', name: 'Main Bot',
+          token: oldToken, chatId: oldChatId ?? '',
+          hitTimeframes: ['30m','1h'], newTimeframes: [],
+        )];
+        await _persistBots(prefs);
+      }
+    }
 
-    Config.patternBE           = prefs.getBool(_kPatternBE)             ?? Config.patternBE;
-    Config.patternMS           = prefs.getBool(_kPatternMS)             ?? Config.patternMS;
-    Config.patternES           = prefs.getBool(_kPatternES)             ?? Config.patternES;
-    Config.patternRequireTrend = prefs.getBool(_kPatternRequireTrend)   ?? Config.patternRequireTrend;
-    Config.patternStarBodyPct  = prefs.getDouble(_kPatternStarBodyPct)  ?? Config.patternStarBodyPct;
-    Config.patternRecoveryPct  = prefs.getDouble(_kPatternRecoveryPct)  ?? Config.patternRecoveryPct;
+    // ── Price Alerts ──────────────────────────────────────
+    final alertsStr = prefs.getString(_kPriceAlerts);
+    if (alertsStr != null && alertsStr.isNotEmpty) {
+      try {
+        final list = jsonDecode(alertsStr) as List;
+        Config.priceAlerts = list
+            .map((j) => PriceAlert.fromJson(Map<String, dynamic>.from(j as Map)))
+            .toList();
+      } catch (_) { Config.priceAlerts = []; }
+    }
+
+    Config.symbols           = prefs.getStringList(_kSymbols) ?? Config.symbols;
+    Config.pivotLen          = prefs.getInt(_kPivotLen)       ?? Config.pivotLen;
+    Config.limit             = prefs.getInt(_kLimit)          ?? Config.limit;
+    Config.checkEveryMinutes = prefs.getInt(_kCheckEvery)     ?? Config.checkEveryMinutes;
+
+    // ─── NEW: load pattern settings ───────────────────────
+    Config.patternBE           = prefs.getBool(_kPatternBE)            ?? Config.patternBE;
+    Config.patternMS           = prefs.getBool(_kPatternMS)            ?? Config.patternMS;
+    Config.patternES           = prefs.getBool(_kPatternES)            ?? Config.patternES;
+    Config.patternRequireTrend = prefs.getBool(_kPatternRequireTrend)  ?? Config.patternRequireTrend;
+    Config.patternStarBodyPct  = prefs.getDouble(_kPatternStarBodyPct) ?? Config.patternStarBodyPct;
+    Config.patternRecoveryPct  = prefs.getDouble(_kPatternRecoveryPct) ?? Config.patternRecoveryPct;
   }
 
-  // ─── Push ALL config live to background isolate ───────
   static Future<void> _pushToBackground() async {
     final svc = FlutterBackgroundService();
     if (!await svc.isRunning()) return;
-
     svc.invoke('updateConfig', {
-      'botToken':          Config.botToken,
-      'chatId':            Config.chatId,
+      'bots':              Config.bots.map((b) => b.toJson()).toList(),
       'symbols':           Config.symbols,
-      'timeframes':        Config.timeframes,
       'pivotLen':          Config.pivotLen,
       'limit':             Config.limit,
       'checkEveryMinutes': Config.checkEveryMinutes,
-      // Pattern settings
+      'priceAlerts':       Config.priceAlerts.map((a) => a.toJson()).toList(),
+      // ─── NEW: pattern settings ───────────────────────
       'patternBE':           Config.patternBE,
       'patternMS':           Config.patternMS,
       'patternES':           Config.patternES,
@@ -100,35 +299,33 @@ class ConfigService {
     });
   }
 
-  // ─── Wipe ALL dedup keys (HH_, LL_, PAT_) ────────────
+  static Future<void> _persistBots(SharedPreferences prefs) async =>
+      prefs.setString(_kBotsV2,
+          jsonEncode(Config.bots.map((b) => b.toJson()).toList()));
+
+  static Future<void> _persistAlerts(SharedPreferences prefs) async =>
+      prefs.setString(_kPriceAlerts,
+          jsonEncode(Config.priceAlerts.map((a) => a.toJson()).toList()));
+
   static Future<void> _clearAllDedupKeys() async {
     final prefs = await SharedPreferences.getInstance();
     final stale = prefs.getKeys()
         .where((k) =>
             k.startsWith('HH_') ||
             k.startsWith('LL_') ||
-            k.startsWith('PAT_'))
+            k.startsWith('PAT_'))   // ← NEW: also clear pattern dedup keys
         .toList();
-    for (final k in stale) {
-      await prefs.remove(k);
-    }
+    for (final k in stale) await prefs.remove(k);
     print('🧹 Cleared ${stale.length} dedup keys');
   }
 
-  // ─── Save Telegram ────────────────────────────────────
-  static Future<void> saveTelegram({
-    required String botToken,
-    required String chatId,
-  }) async {
+  static Future<void> saveBots(List<TelegramBot> bots) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kBotToken, botToken);
-    await prefs.setString(_kChatId, chatId);
-    Config.botToken = botToken;
-    Config.chatId   = chatId;
+    Config.bots = List.from(bots);
+    await _persistBots(prefs);
     await _pushToBackground();
   }
 
-  // ─── Save Trading Pairs ───────────────────────────────
   static Future<void> saveSymbols(List<String> newSymbols) async {
     final prefs = await SharedPreferences.getInstance();
     await _clearAllDedupKeys();
@@ -137,29 +334,14 @@ class ConfigService {
     await _pushToBackground();
   }
 
-  // ─── Save Timeframes ──────────────────────────────────
-  static Future<void> saveTimeframes(List<String> timeframes) async {
-    final prefs = await SharedPreferences.getInstance();
-    await _clearAllDedupKeys();
-    await prefs.setStringList(_kTimeframes, timeframes);
-    Config.timeframes = timeframes;
-    await _pushToBackground();
-  }
-
-  // ─── Save Indicator Settings ──────────────────────────
-  static Future<void> saveIndicator({
-    required int pivotLen,
-    required int limit,
-  }) async {
+  static Future<void> saveIndicator({required int pivotLen, required int limit}) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_kPivotLen, pivotLen);
     await prefs.setInt(_kLimit, limit);
-    Config.pivotLen = pivotLen;
-    Config.limit    = limit;
+    Config.pivotLen = pivotLen; Config.limit = limit;
     await _pushToBackground();
   }
 
-  // ─── Save Bot Settings ────────────────────────────────
   static Future<void> saveBotSettings({required int checkEveryMinutes}) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_kCheckEvery, checkEveryMinutes);
@@ -167,7 +349,21 @@ class ConfigService {
     await _pushToBackground();
   }
 
-  // ─── Save Pattern Settings ────────────────────────────
+  /// Called from the main isolate — saves + pushes to background.
+  static Future<void> savePriceAlerts(List<PriceAlert> alerts) async {
+    final prefs = await SharedPreferences.getInstance();
+    Config.priceAlerts = List.from(alerts);
+    await _persistAlerts(prefs);
+    await _pushToBackground();
+  }
+
+  /// Called from the BACKGROUND isolate — saves directly, no push.
+  static Future<void> savePriceAlertsFromBackground(
+      SharedPreferences prefs) async {
+    await _persistAlerts(prefs);
+  }
+
+  // ─── NEW: Save pattern settings ───────────────────────
   static Future<void> savePatternSettings({
     required bool   patternBE,
     required bool   patternMS,
@@ -177,10 +373,10 @@ class ConfigService {
     required double patternRecoveryPct,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kPatternBE,           patternBE);
-    await prefs.setBool(_kPatternMS,           patternMS);
-    await prefs.setBool(_kPatternES,           patternES);
-    await prefs.setBool(_kPatternRequireTrend, patternRequireTrend);
+    await prefs.setBool(_kPatternBE,            patternBE);
+    await prefs.setBool(_kPatternMS,            patternMS);
+    await prefs.setBool(_kPatternES,            patternES);
+    await prefs.setBool(_kPatternRequireTrend,  patternRequireTrend);
     await prefs.setDouble(_kPatternStarBodyPct, patternStarBodyPct);
     await prefs.setDouble(_kPatternRecoveryPct, patternRecoveryPct);
 

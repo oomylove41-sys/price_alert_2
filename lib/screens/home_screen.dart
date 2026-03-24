@@ -9,8 +9,8 @@ import '../config.dart';
 
 class AlertLog {
   final String symbol;
-  final String type; // 'HH' or 'LL'
-  final String kind; // 'hit' or 'new'
+  final String type; // 'HH', 'LL', 'BE', 'MS', 'ES'
+  final String kind; // 'hit', 'new', or 'pattern'
   final double price;
   final String timeframe;
   final DateTime time;
@@ -64,12 +64,12 @@ class _HomeBodyState extends State<HomeBody> {
           _alertLogs.insert(
             0,
             AlertLog(
-              symbol: data['symbol'] as String,
-              type: data['type'] as String,
-              kind: data['kind'] as String? ?? 'hit',
-              price: (data['price'] as num).toDouble(),
+              symbol:    data['symbol']    as String,
+              type:      data['type']      as String,
+              kind:      data['kind']      as String? ?? 'hit',
+              price:     (data['price']    as num).toDouble(),
               timeframe: data['timeframe'] as String,
-              time: DateTime.parse(data['time'] as String),
+              time:      DateTime.parse(data['time'] as String),
             ),
           );
         });
@@ -92,7 +92,10 @@ class _HomeBodyState extends State<HomeBody> {
     final prefs = await SharedPreferences.getInstance();
     final keys = prefs
         .getKeys()
-        .where((k) => k.startsWith('HH_') || k.startsWith('LL_'))
+        .where((k) =>
+            k.startsWith('HH_') ||
+            k.startsWith('LL_') ||
+            k.startsWith('PAT_'))   // ← NEW: also clear pattern dedup keys
         .toList();
     for (final key in keys) {
       await prefs.remove(key);
@@ -308,25 +311,40 @@ class _HomeBodyState extends State<HomeBody> {
   }
 
   Widget _buildAlertTile(AlertLog log, bool isDark) {
-    final isHH = log.type == 'HH';
+    final isHH  = log.type == 'HH';
     final isNew = log.kind == 'new';
 
-    // Colors: orange tint for "new level", red/green for "hit"
-    final Color color;
+    final Color  color;
     final String emoji;
     final String title;
     final String subtitle;
 
-    if (isNew) {
-      color = isHH ? Colors.orange.shade400 : Colors.purple.shade300;
-      emoji = isHH ? '📈' : '📉';
-      title =
-          '$emoji ${log.symbol} · New ${isHH ? "HH" : "LL"} · ${log.timeframe}';
+    // ─── NEW: candlestick pattern tiles ──────────────
+    if (log.type == 'BE') {
+      color    = Colors.green.shade400;
+      emoji    = '🟢';
+      title    = '$emoji ${log.symbol} · Bullish Engulfing · ${log.timeframe}';
+      subtitle = 'Bullish reversal signal ↑';
+    } else if (log.type == 'MS') {
+      color    = Colors.blue.shade400;
+      emoji    = '☀️';
+      title    = '$emoji ${log.symbol} · Morning Star · ${log.timeframe}';
+      subtitle = 'Bullish reversal after downtrend ↑';
+    } else if (log.type == 'ES') {
+      color    = Colors.red.shade400;
+      emoji    = '🌙';
+      title    = '$emoji ${log.symbol} · Evening Star · ${log.timeframe}';
+      subtitle = 'Bearish reversal after uptrend ↓';
+    // ─── Original: HH/LL tiles (unchanged) ───────────
+    } else if (isNew) {
+      color    = isHH ? Colors.orange.shade400 : Colors.purple.shade300;
+      emoji    = isHH ? '📈' : '📉';
+      title    = '$emoji ${log.symbol} · New ${isHH ? "HH" : "LL"} · ${log.timeframe}';
       subtitle = isHH ? 'New Higher High Formed' : 'New Lower Low Formed';
     } else {
-      color = isHH ? Colors.redAccent : Colors.greenAccent;
-      emoji = isHH ? '🔴' : '🟢';
-      title = '$emoji ${log.symbol} · ${log.type} Hit · ${log.timeframe}';
+      color    = isHH ? Colors.redAccent : Colors.greenAccent;
+      emoji    = isHH ? '🔴' : '🟢';
+      title    = '$emoji ${log.symbol} · ${log.type} Hit · ${log.timeframe}';
       subtitle = isHH ? 'Resistance Hit' : 'Support Hit';
     }
 
@@ -341,14 +359,16 @@ class _HomeBodyState extends State<HomeBody> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title,
-                  style: const TextStyle(
-                      fontWeight: FontWeight.bold, fontSize: 13)),
-              Text(subtitle, style: TextStyle(color: color, fontSize: 12)),
-            ],
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 13)),
+                Text(subtitle, style: TextStyle(color: color, fontSize: 12)),
+              ],
+            ),
           ),
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
