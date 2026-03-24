@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 import 'home_screen.dart';
+import 'price_alerts_screen.dart';
 import 'settings_screen.dart';
 
 class MainShell extends StatefulWidget {
@@ -19,12 +20,11 @@ class _MainShellState extends State<MainShell> {
 
   // ─── 6 bottom nav tabs ───────────────────────────────
   static const _tabs = [
-    _TabItem(label: 'Home',       icon: Icons.home_rounded),
-    _TabItem(label: 'Pairs',      icon: Icons.currency_bitcoin),
+    _TabItem(label: 'Home', icon: Icons.home_rounded),
+    _TabItem(label: 'Pairs', icon: Icons.currency_bitcoin),
     _TabItem(label: 'Timeframes', icon: Icons.access_time_rounded),
-    _TabItem(label: 'Indicator',  icon: Icons.tune_rounded),
-    _TabItem(label: 'Bot',        icon: Icons.settings_rounded),
-    _TabItem(label: 'Patterns',   icon: Icons.candlestick_chart),
+    _TabItem(label: 'Indicator', icon: Icons.tune_rounded),
+    _TabItem(label: 'Bot', icon: Icons.settings_rounded),
   ];
 
   static const _titles = [
@@ -33,7 +33,6 @@ class _MainShellState extends State<MainShell> {
     'Timeframes',
     'Indicator Settings',
     'Bot Settings',
-    'Pattern Settings',
   ];
 
   // ─── Snackbar on save ────────────────────────────────
@@ -75,10 +74,81 @@ class _MainShellState extends State<MainShell> {
       TimeframesSettingsPage(onSaved: _onSaved),
       IndicatorSettingsPage(onSaved: _onSaved),
       BotSettingsPage(onSaved: _onSaved),
-      PatternSettingsPage(onSaved: _onSaved),
     ];
 
     return Scaffold(
+      drawer: Drawer(
+        child: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                color: Colors.blueAccent,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    SizedBox(height: 8),
+                    Icon(Icons.show_chart, color: Colors.white, size: 36),
+                    SizedBox(height: 12),
+                    Text('HH/LL Alert Bot',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold)),
+                    SizedBox(height: 4),
+                    Text('Crypto trading alerts',
+                        style: TextStyle(color: Colors.white70)),
+                    SizedBox(height: 12),
+                  ],
+                ),
+              ),
+              ListTile(
+                leading:
+                    const Icon(Icons.notifications, color: Colors.blueAccent),
+                title: const Text('Price Alerts'),
+                subtitle: const Text('Set custom price targets'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const PriceAlertsScreen()));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.candlestick_chart,
+                    color: Colors.blueAccent),
+                title: const Text('Patterns'),
+                subtitle: const Text('Pattern detection settings'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => Scaffold(
+                                appBar: AppBar(
+                                    title: const Text('Pattern Settings')),
+                                body: PatternSettingsPage(onSaved: _onSaved),
+                              )));
+                },
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text('More features coming soon',
+                    style: TextStyle(color: Colors.grey)),
+              ),
+              const Spacer(),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text('HH/LL Alert Bot • v1.0',
+                    style: TextStyle(color: Theme.of(context).dividerColor)),
+              ),
+            ],
+          ),
+        ),
+      ),
       appBar: AppBar(
         title: Text(_titles[_index]),
         centerTitle: false,
@@ -102,8 +172,7 @@ class _MainShellState extends State<MainShell> {
         selectedItemColor: Colors.blueAccent,
         unselectedItemColor:
             isDark ? Colors.grey.shade600 : Colors.grey.shade500,
-        backgroundColor:
-            isDark ? const Color(0xFF1E1E2E) : Colors.white,
+        backgroundColor: isDark ? const Color(0xFF1E1E2E) : Colors.white,
         selectedFontSize: 10,
         unselectedFontSize: 10,
         elevation: 12,
@@ -144,8 +213,7 @@ class _TelegramSheet extends StatelessWidget {
       builder: (_, controller) => Container(
         decoration: BoxDecoration(
           color: sheetColor,
-          borderRadius:
-              const BorderRadius.vertical(top: Radius.circular(20)),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
         ),
         child: Column(
           children: [
@@ -155,9 +223,7 @@ class _TelegramSheet extends StatelessWidget {
               width: 40,
               height: 4,
               decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.grey.shade700
-                    : Colors.grey.shade300,
+                color: isDark ? Colors.grey.shade700 : Colors.grey.shade300,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
