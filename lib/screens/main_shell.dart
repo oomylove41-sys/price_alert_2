@@ -59,7 +59,42 @@ class _MainShellState extends State<MainShell> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _TelegramSheet(onSaved: _onSaved),
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.85,
+        minChildSize: 0.5,
+        maxChildSize: 0.95,
+        builder: (_, controller) => Container(
+          decoration: BoxDecoration(
+            color: Theme.of(ctx).brightness == Brightness.dark
+                ? const Color(0xFF1E1E2E)
+                : Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              const SizedBox(height: 12),
+              Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Theme.of(ctx).brightness == Brightness.dark
+                        ? Colors.grey.shade700
+                        : Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
+                  )),
+              Expanded(
+                child: SingleChildScrollView(
+                  controller: controller,
+                  child: TelegramSettingsPage(onSaved: () {
+                    _onSaved();
+                    Navigator.pop(ctx);
+                  }),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

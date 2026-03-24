@@ -14,7 +14,7 @@ import 'telegram_service.dart';
 
 // ─── Top-level state (isolate-local) ─────────────────────
 Timer? _checkTimer;
-bool _isBusy    = false;
+bool _isBusy = false;
 bool _shouldStop = false;
 
 // ─── INIT BACKGROUND SERVICE ─────────────────────────────
@@ -67,14 +67,15 @@ void onBackgroundStart(ServiceInstance service) async {
   WidgetsFlutterBinding.ensureInitialized();
 
   _shouldStop = false;
-  _isBusy     = false;
+  _isBusy = false;
   _checkTimer?.cancel();
   _checkTimer = null;
 
   print('🚀 Background service started');
 
   await ConfigService.load();
-  print('✅ Config loaded: ${Config.symbols} | ${Config.timeframes} | every ${Config.checkEveryMinutes}m');
+  print(
+      '✅ Config loaded: ${Config.symbols} | ${Config.timeframes} | every ${Config.checkEveryMinutes}m');
 
   // ─── Stop command ─────────────────────────────────────
   service.on('stop').listen((event) {
@@ -109,10 +110,11 @@ void onBackgroundStart(ServiceInstance service) async {
     }
     if (data['checkEveryMinutes'] != null) {
       final newInterval = data['checkEveryMinutes'] as int;
-      final changed     = newInterval != Config.checkEveryMinutes;
+      final changed = newInterval != Config.checkEveryMinutes;
       Config.checkEveryMinutes = newInterval;
       if (changed) {
-        print('⏱ Interval changed to ${Config.checkEveryMinutes}m — restarting timer');
+        print(
+            '⏱ Interval changed to ${Config.checkEveryMinutes}m — restarting timer');
         _restartTimer(service);
       }
     }
@@ -131,10 +133,12 @@ void onBackgroundStart(ServiceInstance service) async {
       Config.patternRequireTrend = data['patternRequireTrend'] as bool;
     }
     if (data['patternStarBodyPct'] != null) {
-      Config.patternStarBodyPct = (data['patternStarBodyPct'] as num).toDouble();
+      Config.patternStarBodyPct =
+          (data['patternStarBodyPct'] as num).toDouble();
     }
     if (data['patternRecoveryPct'] != null) {
-      Config.patternRecoveryPct = (data['patternRecoveryPct'] as num).toDouble();
+      Config.patternRecoveryPct =
+          (data['patternRecoveryPct'] as num).toDouble();
     }
 
     print('🔄 Config updated: symbols=${Config.symbols}, '
@@ -229,27 +233,27 @@ Future<void> _checkTimeframe(
 
     // ─── Higher High ───────────────────────────────────
     if (result.hh != null) {
-      final key            = 'HH_${symbol}_${timeframe}_${result.hh!.toStringAsFixed(5)}';
+      final key = 'HH_${symbol}_${timeframe}_${result.hh!.toStringAsFixed(5)}';
       final alreadyAlerted = prefs.getBool(key) ?? false;
-      final isHit          = PivotService.isHit(lastClosed, result.hh!, true) ||
-                             PivotService.isHit(liveCandle,  result.hh!, true);
+      final isHit = PivotService.isHit(lastClosed, result.hh!, true) ||
+          PivotService.isHit(liveCandle, result.hh!, true);
 
       if (!alreadyAlerted && isHit) {
-        final ok = await TelegramService.sendAlert(
-          levelType:    'HH',
-          levelPrice:   result.hh!,
-          timeframe:    timeframe,
+        final ok = await TelegramService.sendHitAlert(
+          levelType: 'HH',
+          levelPrice: result.hh!,
+          timeframe: timeframe,
           currentPrice: liveCandle.close,
-          symbol:       symbol,
+          symbol: symbol,
         );
         if (ok) {
           await prefs.setBool(key, true);
           service.invoke('alert', {
-            'symbol':    symbol,
-            'type':      'HH',
-            'price':     result.hh!,
+            'symbol': symbol,
+            'type': 'HH',
+            'price': result.hh!,
             'timeframe': timeframe,
-            'time':      DateTime.now().toIso8601String(),
+            'time': DateTime.now().toIso8601String(),
           });
           print('✅ $symbol HH @ ${result.hh} ($timeframe)');
         } else {
@@ -260,27 +264,27 @@ Future<void> _checkTimeframe(
 
     // ─── Lower Low ─────────────────────────────────────
     if (result.ll != null) {
-      final key            = 'LL_${symbol}_${timeframe}_${result.ll!.toStringAsFixed(5)}';
+      final key = 'LL_${symbol}_${timeframe}_${result.ll!.toStringAsFixed(5)}';
       final alreadyAlerted = prefs.getBool(key) ?? false;
-      final isHit          = PivotService.isHit(lastClosed, result.ll!, false) ||
-                             PivotService.isHit(liveCandle,  result.ll!, false);
+      final isHit = PivotService.isHit(lastClosed, result.ll!, false) ||
+          PivotService.isHit(liveCandle, result.ll!, false);
 
       if (!alreadyAlerted && isHit) {
-        final ok = await TelegramService.sendAlert(
-          levelType:    'LL',
-          levelPrice:   result.ll!,
-          timeframe:    timeframe,
+        final ok = await TelegramService.sendHitAlert(
+          levelType: 'LL',
+          levelPrice: result.ll!,
+          timeframe: timeframe,
           currentPrice: liveCandle.close,
-          symbol:       symbol,
+          symbol: symbol,
         );
         if (ok) {
           await prefs.setBool(key, true);
           service.invoke('alert', {
-            'symbol':    symbol,
-            'type':      'LL',
-            'price':     result.ll!,
+            'symbol': symbol,
+            'type': 'LL',
+            'price': result.ll!,
             'timeframe': timeframe,
-            'time':      DateTime.now().toIso8601String(),
+            'time': DateTime.now().toIso8601String(),
           });
           print('✅ $symbol LL @ ${result.ll} ($timeframe)');
         } else {
@@ -295,31 +299,32 @@ Future<void> _checkTimeframe(
     // so the timestamp dedup key is stable between bot ticks.
     // ═══════════════════════════════════════════════════
     final closedCandles = candles.sublist(0, candles.length - 1);
-    final patResult     = CandlestickPatternService.detect(closedCandles);
+    final patResult = CandlestickPatternService.detect(closedCandles);
 
     if (patResult.hasPattern) {
       // Dedup key uses the last-closed candle's open-time
-      final barTimestamp = closedCandles.last.time.millisecondsSinceEpoch.toString();
-      final closePrice   = closedCandles.last.close;
+      final barTimestamp =
+          closedCandles.last.time.millisecondsSinceEpoch.toString();
+      final closePrice = closedCandles.last.close;
 
       // ─── Bullish Engulfing ──────────────────────────
       if (patResult.isBE) {
         final key = 'PAT_BE_${symbol}_${timeframe}_$barTimestamp';
         if (!(prefs.getBool(key) ?? false)) {
-          final ok = await TelegramService.sendPatternAlert(
+          final ok = await TelegramService.sendPatternAlertAll(
             patternType: 'BE',
-            symbol:      symbol,
-            timeframe:   timeframe,
-            price:       closePrice,
+            symbol: symbol,
+            timeframe: timeframe,
+            price: closePrice,
           );
           if (ok) {
             await prefs.setBool(key, true);
             service.invoke('alert', {
-              'symbol':    symbol,
-              'type':      'BE',
-              'price':     closePrice,
+              'symbol': symbol,
+              'type': 'BE',
+              'price': closePrice,
               'timeframe': timeframe,
-              'time':      DateTime.now().toIso8601String(),
+              'time': DateTime.now().toIso8601String(),
             });
             print('✅ $symbol Bullish Engulfing ($timeframe)');
           } else {
@@ -332,20 +337,20 @@ Future<void> _checkTimeframe(
       if (patResult.isMS) {
         final key = 'PAT_MS_${symbol}_${timeframe}_$barTimestamp';
         if (!(prefs.getBool(key) ?? false)) {
-          final ok = await TelegramService.sendPatternAlert(
+          final ok = await TelegramService.sendPatternAlertAll(
             patternType: 'MS',
-            symbol:      symbol,
-            timeframe:   timeframe,
-            price:       closePrice,
+            symbol: symbol,
+            timeframe: timeframe,
+            price: closePrice,
           );
           if (ok) {
             await prefs.setBool(key, true);
             service.invoke('alert', {
-              'symbol':    symbol,
-              'type':      'MS',
-              'price':     closePrice,
+              'symbol': symbol,
+              'type': 'MS',
+              'price': closePrice,
               'timeframe': timeframe,
-              'time':      DateTime.now().toIso8601String(),
+              'time': DateTime.now().toIso8601String(),
             });
             print('✅ $symbol Morning Star ($timeframe)');
           } else {
@@ -358,20 +363,20 @@ Future<void> _checkTimeframe(
       if (patResult.isES) {
         final key = 'PAT_ES_${symbol}_${timeframe}_$barTimestamp';
         if (!(prefs.getBool(key) ?? false)) {
-          final ok = await TelegramService.sendPatternAlert(
+          final ok = await TelegramService.sendPatternAlertAll(
             patternType: 'ES',
-            symbol:      symbol,
-            timeframe:   timeframe,
-            price:       closePrice,
+            symbol: symbol,
+            timeframe: timeframe,
+            price: closePrice,
           );
           if (ok) {
             await prefs.setBool(key, true);
             service.invoke('alert', {
-              'symbol':    symbol,
-              'type':      'ES',
-              'price':     closePrice,
+              'symbol': symbol,
+              'type': 'ES',
+              'price': closePrice,
               'timeframe': timeframe,
-              'time':      DateTime.now().toIso8601String(),
+              'time': DateTime.now().toIso8601String(),
             });
             print('✅ $symbol Evening Star ($timeframe)');
           } else {

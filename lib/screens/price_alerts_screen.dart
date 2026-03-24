@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../config.dart';
 import '../services/binance_service.dart';
+import '../services/candlestick_pattern_service.dart';
+import '../services/telegram_service.dart';
 
 // ══════════════════════════════════════════════════════════
 // ─── MAIN SCREEN ─────────────────────────────────────────
@@ -467,8 +469,10 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
   late final TextEditingController _priceCtrl;
   late String _condition; // 'above' | 'below'
   late String _selectedBotId;
+  late String _selectedTf;
   bool _validating = false;
   bool _symbolValid = false;
+  bool _scanning = false;
 
   @override
   void initState() {
@@ -480,6 +484,7 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
         TextEditingController(text: e != null ? _fmtRaw(e.targetPrice) : '');
     _condition = e?.condition ?? 'above';
     _selectedBotId = e?.botId ?? _defaultBotId();
+    _selectedTf = Config.timeframes.isNotEmpty ? Config.timeframes.first : '1h';
     _symbolValid = e != null; // existing symbol already validated
   }
 
@@ -520,6 +525,57 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
         _validating = false;
         _symbolValid = result.isValid;
       });
+  }
+
+  Future<void> _scanPattern(String patternType) async {
+    final sym = _symbolCtrl.text.trim().toUpperCase();
+    if (sym.isEmpty || !_symbolValid) {
+      _snack('Validate the symbol first', isError: true);
+      return;
+    }
+    if (_selectedBotId.isEmpty) {
+      _snack('Select a bot to send the alert', isError: true);
+      return;
+    }
+
+    final bot = Config.bots.firstWhere((b) => b.id == _selectedBotId);
+    if (!bot.isConfigured) {
+      _snack('Selected bot is not configured', isError: true);
+      return;
+    }
+
+    setState(() => _scanning = true);
+    try {
+      final candles = await BinanceService.fetchCandles(sym, _selectedTf);
+      final res = CandlestickPatternService.detect(candles);
+
+      bool found = false;
+      double price = candles.last.close;
+      if (patternType == 'BE' && res.isBE) found = true;
+      if (patternType == 'MS' && res.isMS) found = true;
+      if (patternType == 'ES' && res.isES) found = true;
+
+      if (found) {
+        final ok = await TelegramService.sendPatternAlertToBot(
+          bot: bot,
+          patternType: patternType,
+          symbol: sym,
+          timeframe: _selectedTf,
+          price: price,
+        );
+        if (ok)
+          _snack('Pattern found and sent via ${bot.name}', isError: false);
+        else
+          _snack('Pattern found but failed to send', isError: true);
+      } else {
+        _snack('No $patternType pattern detected for $sym on $_selectedTf',
+            isError: true);
+      }
+    } catch (e) {
+      _snack('Failed to scan: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _scanning = false);
+    }
   }
 
   PriceAlert _build() {
@@ -783,7 +839,87 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
                                       setState(() => _selectedBotId = bot.id),
                                 )),
 
-                      const SizedBox(height: 28),
+                      const SizedBox(height: 12),
+
+                      // ── Pattern finder (scan symbol/timeframe) ──
+                      _Label('Pattern Finder'),
+                      const SizedBox(height: 8),
+                      Row(children: [
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? const Color(0xFF1A1A2E)
+                                  : Colors.grey.shade50,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                  color: isDark
+                                      ? Colors.grey.shade700
+                                      : Colors.grey.shade300),
+                            ),
+                            child: Row(children: [
+                              const Icon(Icons.schedule,
+                                  size: 18, color: Colors.grey),
+                              const SizedBox(width: 8),
+                              const Text('Timeframe',
+                                  style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600)),
+                              const SizedBox(width: 10),
+                              const Spacer(),
+                              DropdownButtonHideUnderline(
+                                child: DropdownButton<String>(
+                                  value: _selectedTf,
+                                  items: Config.timeframes
+                                      .map((tf) => DropdownMenuItem(
+                                          value: tf, child: Text(tf)))
+                                      .toList(),
+                                  onChanged: (v) => setState(() {
+                                    if (v != null) _selectedTf = v;
+                                  }),
+                                ),
+                              ),
+                            ]),
+                          ),
+                        ),
+                      ]),
+                      const SizedBox(height: 8),
+
+                      Row(children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed:
+                                _scanning ? null : () => _scanPattern('BE'),
+                            child: _scanning
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2))
+                                : const Text('Find BE'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed:
+                                _scanning ? null : () => _scanPattern('MS'),
+                            child: const Text('Find MS'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed:
+                                _scanning ? null : () => _scanPattern('ES'),
+                            child: const Text('Find ES'),
+                          ),
+                        ),
+                      ]),
+
+                      const SizedBox(height: 18),
 
                       // ── Save button ────────────────────
                       SizedBox(
