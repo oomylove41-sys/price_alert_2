@@ -107,7 +107,7 @@ class TelegramBot {
 }
 
 // ══════════════════════════════════════════════════════════
-// ─── PRICE ALERT ─────────────────────────────────────════
+// ─── PRICE ALERT ─────────────────────────────────────────
 // ══════════════════════════════════════════════════════════
 class PriceAlert {
   final String id;
@@ -150,6 +150,7 @@ class PriceAlert {
       case 'below':
         return currentPrice <= targetPrice;
       case 'touch':
+        // Fire when price is within 0.2% of the target (from either side)
         final pct = (currentPrice - targetPrice).abs() / targetPrice;
         return pct <= 0.002;
       default:
@@ -207,25 +208,96 @@ class PriceAlert {
 }
 
 // ══════════════════════════════════════════════════════════
+// ─── PATTERN ALERT (BE / MS / ES) ─────────────────────────
+// ══════════════════════════════════════════════════════════
+class PatternAlert {
+  final String id;
+  String symbol;
+
+  /// Which patterns to watch: 'BE', 'MS', 'ES'
+  List<String> patterns;
+
+  /// Timeframes to monitor for this alert. Empty = use global effectiveTimeframes
+  List<String> timeframes;
+
+  /// Which TelegramBot to use
+  String botId;
+
+  String label;
+  bool isActive;
+  final DateTime createdAt;
+
+  PatternAlert({
+    required this.id,
+    required this.symbol,
+    required this.patterns,
+    required this.timeframes,
+    required this.botId,
+    this.label = '',
+    this.isActive = true,
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
+
+  PatternAlert copyWith({
+    String? symbol,
+    List<String>? patterns,
+    List<String>? timeframes,
+    String? botId,
+    String? label,
+    bool? isActive,
+  }) =>
+      PatternAlert(
+        id: id,
+        symbol: symbol ?? this.symbol,
+        patterns: patterns ?? List.from(this.patterns),
+        timeframes: timeframes ?? List.from(this.timeframes),
+        botId: botId ?? this.botId,
+        label: label ?? this.label,
+        isActive: isActive ?? this.isActive,
+        createdAt: createdAt,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'symbol': symbol,
+        'patterns': patterns,
+        'timeframes': timeframes,
+        'botId': botId,
+        'label': label,
+        'isActive': isActive,
+        'createdAt': createdAt.toIso8601String(),
+      };
+
+  factory PatternAlert.fromJson(Map<String, dynamic> j) => PatternAlert(
+        id: j['id'] as String? ?? _genId(),
+        symbol: j['symbol'] as String? ?? '',
+        patterns: j['patterns'] is List
+            ? List<String>.from(j['patterns'] as List)
+            : <String>[],
+        timeframes: j['timeframes'] is List
+            ? List<String>.from(j['timeframes'] as List)
+            : <String>[],
+        botId: j['botId'] as String? ?? 'default',
+        label: j['label'] as String? ?? '',
+        isActive: j['isActive'] as bool? ?? true,
+        createdAt: DateTime.tryParse(j['createdAt'] as String? ?? '') ??
+            DateTime.now(),
+      );
+
+  static String _genId() => DateTime.now().microsecondsSinceEpoch.toString();
+}
+
+// ══════════════════════════════════════════════════════════
 // ─── CONFIG ──────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════
 class Config {
   static List<TelegramBot> bots = [_defaultBot()];
   static List<String> symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT'];
-  // Global (user-selected) timeframes. Stored separately from per-bot timeframes.
-  static List<String> timeframes = ['30m', '1h'];
   static int pivotLen = 5;
   static int limit = 1000;
   static int checkEveryMinutes = 5;
   static List<PriceAlert> priceAlerts = [];
-
-  // ─── NEW: Candlestick pattern settings ────────────────
-  static bool patternBE = true;
-  static bool patternMS = true;
-  static bool patternES = true;
-  static bool patternRequireTrend = true;
-  static double patternStarBodyPct = 30.0;
-  static double patternRecoveryPct = 50.0;
+  static List<PatternAlert> patternAlerts = [];
 
   static List<String> get effectiveTimeframes {
     final Set<String> all = {};
@@ -234,37 +306,6 @@ class Config {
       all.addAll(bot.newTimeframes);
     }
     return kAllTimeframes.where(all.contains).toList();
-  }
-
-  // Convenience getters/setters for legacy single-bot flows used across the app.
-  static String get botToken {
-    if (bots.isEmpty) return '';
-    try {
-      return bots.firstWhere((b) => b.isConfigured).token;
-    } catch (_) {
-      return bots.first.token;
-    }
-  }
-
-  static set botToken(String v) {
-    if (bots.isEmpty) bots = [_defaultBot()];
-    final first = bots.first;
-    bots[0] = first.copyWith(token: v);
-  }
-
-  static String get chatId {
-    if (bots.isEmpty) return '';
-    try {
-      return bots.firstWhere((b) => b.isConfigured).chatId;
-    } catch (_) {
-      return bots.first.chatId;
-    }
-  }
-
-  static set chatId(String v) {
-    if (bots.isEmpty) bots = [_defaultBot()];
-    final first = bots.first;
-    bots[0] = first.copyWith(chatId: v);
   }
 }
 
@@ -278,26 +319,18 @@ TelegramBot _defaultBot() => TelegramBot(
     );
 
 // ══════════════════════════════════════════════════════════
-// ─── CONFIG SERVICE ──────────────════════════════════════
+// ─── CONFIG SERVICE ──────────────────────────────────────
 // ══════════════════════════════════════════════════════════
 class ConfigService {
   static const _kBotsV2 = 'cfg_bots_v2';
   static const _kBotToken = 'cfg_bot_token'; // legacy
   static const _kChatId = 'cfg_chat_id'; // legacy
   static const _kSymbols = 'cfg_symbols';
-  static const _kTimeframes = 'cfg_timeframes';
   static const _kPivotLen = 'cfg_pivot_len';
   static const _kLimit = 'cfg_limit';
   static const _kCheckEvery = 'cfg_check_every';
   static const _kPriceAlerts = 'cfg_price_alerts_v1';
-
-  // ─── NEW: pattern keys ────────────────────────────────
-  static const _kPatternBE = 'cfg_pattern_be';
-  static const _kPatternMS = 'cfg_pattern_ms';
-  static const _kPatternES = 'cfg_pattern_es';
-  static const _kPatternRequireTrend = 'cfg_pattern_require_trend';
-  static const _kPatternStarBodyPct = 'cfg_pattern_star_body_pct';
-  static const _kPatternRecoveryPct = 'cfg_pattern_recovery_pct';
+  static const _kPatternAlerts = 'cfg_pattern_alerts_v1';
 
   static Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -348,23 +381,25 @@ class ConfigService {
       }
     }
 
+    // ── Pattern Alerts ───────────────────────────────────
+    final pStr = prefs.getString(_kPatternAlerts);
+    if (pStr != null && pStr.isNotEmpty) {
+      try {
+        final list = jsonDecode(pStr) as List;
+        Config.patternAlerts = list
+            .map((j) =>
+                PatternAlert.fromJson(Map<String, dynamic>.from(j as Map)))
+            .toList();
+      } catch (_) {
+        Config.patternAlerts = [];
+      }
+    }
+
     Config.symbols = prefs.getStringList(_kSymbols) ?? Config.symbols;
-    Config.timeframes = prefs.getStringList(_kTimeframes) ?? Config.timeframes;
     Config.pivotLen = prefs.getInt(_kPivotLen) ?? Config.pivotLen;
     Config.limit = prefs.getInt(_kLimit) ?? Config.limit;
     Config.checkEveryMinutes =
         prefs.getInt(_kCheckEvery) ?? Config.checkEveryMinutes;
-
-    // ─── NEW: load pattern settings ───────────────────────
-    Config.patternBE = prefs.getBool(_kPatternBE) ?? Config.patternBE;
-    Config.patternMS = prefs.getBool(_kPatternMS) ?? Config.patternMS;
-    Config.patternES = prefs.getBool(_kPatternES) ?? Config.patternES;
-    Config.patternRequireTrend =
-        prefs.getBool(_kPatternRequireTrend) ?? Config.patternRequireTrend;
-    Config.patternStarBodyPct =
-        prefs.getDouble(_kPatternStarBodyPct) ?? Config.patternStarBodyPct;
-    Config.patternRecoveryPct =
-        prefs.getDouble(_kPatternRecoveryPct) ?? Config.patternRecoveryPct;
   }
 
   static Future<void> _pushToBackground() async {
@@ -377,13 +412,7 @@ class ConfigService {
       'limit': Config.limit,
       'checkEveryMinutes': Config.checkEveryMinutes,
       'priceAlerts': Config.priceAlerts.map((a) => a.toJson()).toList(),
-      // ─── NEW: pattern settings ───────────────────────
-      'patternBE': Config.patternBE,
-      'patternMS': Config.patternMS,
-      'patternES': Config.patternES,
-      'patternRequireTrend': Config.patternRequireTrend,
-      'patternStarBodyPct': Config.patternStarBodyPct,
-      'patternRecoveryPct': Config.patternRecoveryPct,
+      'patternAlerts': Config.patternAlerts.map((p) => p.toJson()).toList(),
     });
   }
 
@@ -399,10 +428,7 @@ class ConfigService {
     final prefs = await SharedPreferences.getInstance();
     final stale = prefs
         .getKeys()
-        .where((k) =>
-            k.startsWith('HH_') ||
-            k.startsWith('LL_') ||
-            k.startsWith('PAT_')) // ← NEW: also clear pattern dedup keys
+        .where((k) => k.startsWith('HH_') || k.startsWith('LL_'))
         .toList();
     for (final k in stale) await prefs.remove(k);
     print('🧹 Cleared ${stale.length} dedup keys');
@@ -411,25 +437,6 @@ class ConfigService {
   static Future<void> saveBots(List<TelegramBot> bots) async {
     final prefs = await SharedPreferences.getInstance();
     Config.bots = List.from(bots);
-    await _persistBots(prefs);
-    await _pushToBackground();
-  }
-
-  static Future<void> saveTimeframes(List<String> newTimeframes) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_kTimeframes, newTimeframes);
-    Config.timeframes = List.from(newTimeframes);
-    await _pushToBackground();
-  }
-
-  /// Save token/chat as a single migrated Telegram bot (legacy single-bot UI).
-  static Future<void> saveTelegram(
-      {required String botToken, required String chatId}) async {
-    final prefs = await SharedPreferences.getInstance();
-    // Create/update the first bot entry to hold these credentials.
-    if (Config.bots.isEmpty) Config.bots = [_defaultBot()];
-    final first = Config.bots.first.copyWith(token: botToken, chatId: chatId);
-    Config.bots[0] = first;
     await _persistBots(prefs);
     await _pushToBackground();
   }
@@ -467,36 +474,26 @@ class ConfigService {
     await _pushToBackground();
   }
 
+  static Future<void> _persistPatterns(SharedPreferences prefs) async =>
+      prefs.setString(_kPatternAlerts,
+          jsonEncode(Config.patternAlerts.map((p) => p.toJson()).toList()));
+
+  static Future<void> savePatternAlerts(List<PatternAlert> alerts) async {
+    final prefs = await SharedPreferences.getInstance();
+    Config.patternAlerts = List.from(alerts);
+    await _persistPatterns(prefs);
+    await _pushToBackground();
+  }
+
   /// Called from the BACKGROUND isolate — saves directly, no push.
   static Future<void> savePriceAlertsFromBackground(
       SharedPreferences prefs) async {
     await _persistAlerts(prefs);
   }
 
-  // ─── NEW: Save pattern settings ───────────────────────
-  static Future<void> savePatternSettings({
-    required bool patternBE,
-    required bool patternMS,
-    required bool patternES,
-    required bool patternRequireTrend,
-    required double patternStarBodyPct,
-    required double patternRecoveryPct,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kPatternBE, patternBE);
-    await prefs.setBool(_kPatternMS, patternMS);
-    await prefs.setBool(_kPatternES, patternES);
-    await prefs.setBool(_kPatternRequireTrend, patternRequireTrend);
-    await prefs.setDouble(_kPatternStarBodyPct, patternStarBodyPct);
-    await prefs.setDouble(_kPatternRecoveryPct, patternRecoveryPct);
-
-    Config.patternBE = patternBE;
-    Config.patternMS = patternMS;
-    Config.patternES = patternES;
-    Config.patternRequireTrend = patternRequireTrend;
-    Config.patternStarBodyPct = patternStarBodyPct;
-    Config.patternRecoveryPct = patternRecoveryPct;
-
-    await _pushToBackground();
+  /// Called from the BACKGROUND isolate — saves pattern alerts directly, no push.
+  static Future<void> savePatternAlertsFromBackground(
+      SharedPreferences prefs) async {
+    await _persistPatterns(prefs);
   }
 }

@@ -8,7 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../config.dart';
 import '../services/binance_service.dart';
-import '../services/candlestick_pattern_service.dart';
 import '../services/telegram_service.dart';
 
 // ══════════════════════════════════════════════════════════
@@ -23,6 +22,7 @@ class PriceAlertsScreen extends StatefulWidget {
 
 class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
   List<PriceAlert> _alerts = [];
+  List<PatternAlert> _patterns = [];
 
   @override
   void initState() {
@@ -31,11 +31,18 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
   }
 
   void _load() {
-    setState(() => _alerts = List.from(Config.priceAlerts));
+    setState(() {
+      _alerts = List.from(Config.priceAlerts);
+      _patterns = List.from(Config.patternAlerts);
+    });
   }
 
   Future<void> _save() async {
     await ConfigService.savePriceAlerts(_alerts);
+  }
+
+  Future<void> _savePatterns() async {
+    await ConfigService.savePatternAlerts(_patterns);
   }
 
   Future<void> _openEdit(PriceAlert? existing) async {
@@ -54,6 +61,25 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
           _alerts.insert(0, result);
       });
       await _save();
+    }
+  }
+
+  Future<void> _openPatternEdit(PatternAlert? existing) async {
+    final result = await showModalBottomSheet<PatternAlert>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _PatternEditSheet(existing: existing),
+    );
+    if (result != null && mounted) {
+      setState(() {
+        final idx = _patterns.indexWhere((a) => a.id == result.id);
+        if (idx >= 0)
+          _patterns[idx] = result;
+        else
+          _patterns.insert(0, result);
+      });
+      await _savePatterns();
     }
   }
 
@@ -115,6 +141,40 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
     }
   }
 
+  Future<void> _togglePatternActive(PatternAlert alert) async {
+    setState(() {
+      final idx = _patterns.indexWhere((a) => a.id == alert.id);
+      if (idx >= 0) {
+        _patterns[idx] = alert.copyWith(isActive: !alert.isActive);
+      }
+    });
+    await _savePatterns();
+  }
+
+  Future<void> _deletePattern(PatternAlert alert) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Pattern Alert'),
+        content: Text(
+            'Delete "${alert.label.isNotEmpty ? alert.label : "${alert.symbol} pattern alert"}"?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete',
+                  style: TextStyle(color: Colors.redAccent))),
+        ],
+      ),
+    );
+    if (confirm == true && mounted) {
+      setState(() => _patterns.removeWhere((a) => a.id == alert.id));
+      await _savePatterns();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -129,20 +189,32 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
         foregroundColor: isDark ? Colors.white : Colors.black,
         elevation: 0,
         actions: [
-          if (_alerts.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: TextButton.icon(
-                onPressed: () => _openEdit(null),
-                icon: const Icon(Icons.add_rounded, size: 18),
-                label: const Text('Add'),
-                style: TextButton.styleFrom(foregroundColor: Colors.blueAccent),
-              ),
+          // Add Price Alert
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: TextButton.icon(
+              onPressed: () => _openEdit(null),
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: const Text('Add'),
+              style: TextButton.styleFrom(foregroundColor: Colors.blueAccent),
             ),
+          ),
+          // Add Pattern Alert
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: TextButton.icon(
+              onPressed: () => _openPatternEdit(null),
+              icon: const Icon(Icons.auto_graph, size: 18),
+              label: const Text('Pattern'),
+              style: TextButton.styleFrom(foregroundColor: Colors.blueAccent),
+            ),
+          ),
         ],
       ),
-      body: _alerts.isEmpty ? _buildEmpty() : _buildList(isDark),
-      floatingActionButton: _alerts.isEmpty
+      body: (_alerts.isEmpty && _patterns.isEmpty)
+          ? _buildEmpty()
+          : _buildList(isDark),
+      floatingActionButton: (_alerts.isEmpty && _patterns.isEmpty)
           ? null
           : FloatingActionButton(
               onPressed: () => _openEdit(null),
@@ -228,6 +300,17 @@ class _PriceAlertsScreenState extends State<PriceAlertsScreen> {
                 onToggle: () => _toggleActive(a),
                 onDelete: () => _delete(a),
                 onReset: () => _resetTriggered(a),
+              )),
+        ],
+        if (_patterns.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _SectionLabel('Pattern Alerts (${_patterns.length})'),
+          ..._patterns.map((p) => _PatternCard(
+                alert: p,
+                isDark: isDark,
+                onEdit: () => _openPatternEdit(p),
+                onToggle: () => _togglePatternActive(p),
+                onDelete: () => _deletePattern(p),
               )),
         ],
       ],
@@ -451,6 +534,300 @@ class _AlertCard extends StatelessWidget {
   }
 }
 
+// ─── Pattern alert card ─────────────────────────────────
+class _PatternCard extends StatelessWidget {
+  final PatternAlert alert;
+  final bool isDark;
+  final VoidCallback onEdit;
+  final VoidCallback onToggle;
+  final VoidCallback onDelete;
+
+  const _PatternCard({
+    required this.alert,
+    required this.isDark,
+    required this.onEdit,
+    required this.onToggle,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cardBg = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+    String botName = 'Unknown Bot';
+    try {
+      botName = Config.bots.firstWhere((b) => b.id == alert.botId).name;
+    } catch (_) {}
+
+    final statusColor =
+        alert.isActive ? Colors.blueAccent : Colors.grey.shade500;
+
+    return GestureDetector(
+      onTap: onEdit,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        decoration: BoxDecoration(
+          color: cardBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border(left: BorderSide(color: statusColor, width: 4)),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withOpacity(0.05),
+                blurRadius: 6,
+                offset: const Offset(0, 2))
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+          child: Row(children: [
+            Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text(alert.label.isNotEmpty ? alert.label : alert.symbol,
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Text('Patterns: ${alert.patterns.join(', ')}',
+                      style:
+                          TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+                  const SizedBox(height: 4),
+                  Text(
+                      'TFs: ${alert.timeframes.isEmpty ? 'All' : alert.timeframes.join(', ')}',
+                      style:
+                          TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+                  const SizedBox(height: 6),
+                  Row(children: [
+                    Icon(Icons.smart_toy_rounded,
+                        size: 12, color: Colors.grey.shade400),
+                    const SizedBox(width: 6),
+                    Text(botName,
+                        style: TextStyle(
+                            color: Colors.grey.shade500, fontSize: 11)),
+                  ])
+                ])),
+            Column(mainAxisSize: MainAxisSize.min, children: [
+              IconButton(
+                  icon: Icon(
+                      alert.isActive ? Icons.pause_circle : Icons.play_circle,
+                      color: statusColor),
+                  onPressed: onToggle),
+              IconButton(
+                  icon:
+                      const Icon(Icons.edit_rounded, color: Colors.blueAccent),
+                  onPressed: onEdit),
+              IconButton(
+                  icon: const Icon(Icons.delete_outline_rounded,
+                      color: Colors.redAccent),
+                  onPressed: onDelete),
+            ])
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Pattern edit sheet ─────────────────────────────────
+class _PatternEditSheet extends StatefulWidget {
+  final PatternAlert? existing;
+  const _PatternEditSheet({this.existing});
+
+  @override
+  State<_PatternEditSheet> createState() => _PatternEditSheetState();
+}
+
+class _PatternEditSheetState extends State<_PatternEditSheet> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _labelCtrl;
+  late final TextEditingController _symbolCtrl;
+  late final TextEditingController _tfsCtrl;
+  List<String> _selectedPatterns = [];
+  late String _selectedBotId;
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.existing;
+    _labelCtrl = TextEditingController(text: e?.label ?? '');
+    _symbolCtrl = TextEditingController(text: e?.symbol ?? '');
+    _tfsCtrl =
+        TextEditingController(text: e != null ? e.timeframes.join(',') : '');
+    _selectedPatterns = e?.patterns ?? ['BE'];
+    _selectedBotId =
+        e?.botId ?? (Config.bots.isNotEmpty ? Config.bots.first.id : '');
+  }
+
+  @override
+  void dispose() {
+    _labelCtrl.dispose();
+    _symbolCtrl.dispose();
+    _tfsCtrl.dispose();
+    super.dispose();
+  }
+
+  PatternAlert _build() {
+    final e = widget.existing;
+    final tfs = _tfsCtrl.text.trim().isEmpty
+        ? <String>[]
+        : _tfsCtrl.text
+            .trim()
+            .split(',')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
+    return PatternAlert(
+      id: e?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
+      symbol: _symbolCtrl.text.trim().toUpperCase(),
+      patterns: List.from(_selectedPatterns),
+      timeframes: tfs,
+      botId: _selectedBotId,
+      label: _labelCtrl.text.trim(),
+      isActive: e?.isActive ?? true,
+      createdAt: e?.createdAt,
+    );
+  }
+
+  void _save() {
+    if (!_formKey.currentState!.validate()) return;
+    if (_selectedPatterns.isEmpty) {
+      _snack('Select at least one pattern', isError: true);
+      return;
+    }
+    if (_symbolCtrl.text.trim().isEmpty) {
+      _snack('Enter symbol', isError: true);
+      return;
+    }
+    Navigator.pop(context, _build());
+  }
+
+  void _snack(String msg, {required bool isError}) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: isError ? Colors.red.shade700 : Colors.green.shade700,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      margin: const EdgeInsets.all(12),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final sheetColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+    final bots = Config.bots;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.86,
+      minChildSize: 0.5,
+      maxChildSize: 0.97,
+      builder: (_, controller) => Container(
+        decoration: BoxDecoration(
+            color: sheetColor,
+            borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(20))),
+        child: Column(children: [
+          const SizedBox(height: 12),
+          Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                  color: isDark ? Colors.grey.shade700 : Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2))),
+          Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 8, 0),
+              child: Row(children: [
+                const Icon(Icons.auto_graph,
+                    color: Colors.blueAccent, size: 22),
+                const SizedBox(width: 10),
+                const Text('Pattern Alert',
+                    style:
+                        TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                const Spacer(),
+                IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context)),
+              ])),
+          const Divider(height: 1),
+          Expanded(
+              child: SingleChildScrollView(
+                  controller: controller,
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+                  child: Form(
+                      key: _formKey,
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const _Label('Label (optional)'),
+                            _Field(
+                                controller: _labelCtrl,
+                                hint: 'e.g. BTC candlestick patterns',
+                                isDark: isDark),
+                            const SizedBox(height: 12),
+                            const _Label('Symbol'),
+                            _Field(
+                                controller: _symbolCtrl,
+                                hint: 'e.g. BTCUSDT',
+                                isDark: isDark,
+                                capitalization: TextCapitalization.characters,
+                                validator: (v) => v == null || v.trim().isEmpty
+                                    ? 'Symbol required'
+                                    : null),
+                            const SizedBox(height: 12),
+                            const _Label('Patterns'),
+                            Wrap(
+                                spacing: 8,
+                                children: ['BE', 'MS', 'ES']
+                                    .map((p) => ChoiceChip(
+                                        label: Text(p),
+                                        selected: _selectedPatterns.contains(p),
+                                        onSelected: (sel) {
+                                          setState(() {
+                                            if (sel) {
+                                              if (!_selectedPatterns.contains(
+                                                  p)) _selectedPatterns.add(p);
+                                            } else {
+                                              _selectedPatterns.remove(p);
+                                            }
+                                          });
+                                        }))
+                                    .toList()),
+                            const SizedBox(height: 12),
+                            const _Label(
+                                'Timeframes (comma separated) — leave empty for all'),
+                            _Field(
+                                controller: _tfsCtrl,
+                                hint: 'e.g. 1h,4h,1d',
+                                isDark: isDark),
+                            const SizedBox(height: 12),
+                            const _Label('Send Alert Via'),
+                            const SizedBox(height: 8),
+                            if (bots.isEmpty)
+                              _NoBotWarning(reason: 'no-bots')
+                            else
+                              Column(
+                                  children: bots
+                                      .map((b) => _BotOption(
+                                          bot: b,
+                                          selected: b.id == _selectedBotId,
+                                          isDark: isDark,
+                                          onTap: () => setState(
+                                              () => _selectedBotId = b.id)))
+                                      .toList()),
+                            const SizedBox(height: 20),
+                            SizedBox(
+                                width: double.infinity,
+                                height: 48,
+                                child: ElevatedButton(
+                                    onPressed: _save,
+                                    style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.blueAccent),
+                                    child: const Text('Save Pattern Alert'))),
+                          ])))),
+        ]),
+      ),
+    );
+  }
+}
+
 // ══════════════════════════════════════════════════════════
 // ─── ADD / EDIT SHEET ────────────────────────────────────
 // ══════════════════════════════════════════════════════════
@@ -469,10 +846,8 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
   late final TextEditingController _priceCtrl;
   late String _condition; // 'above' | 'below'
   late String _selectedBotId;
-  late String _selectedTf;
   bool _validating = false;
   bool _symbolValid = false;
-  bool _scanning = false;
 
   @override
   void initState() {
@@ -484,7 +859,6 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
         TextEditingController(text: e != null ? _fmtRaw(e.targetPrice) : '');
     _condition = e?.condition ?? 'above';
     _selectedBotId = e?.botId ?? _defaultBotId();
-    _selectedTf = Config.timeframes.isNotEmpty ? Config.timeframes.first : '1h';
     _symbolValid = e != null; // existing symbol already validated
   }
 
@@ -525,57 +899,6 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
         _validating = false;
         _symbolValid = result.isValid;
       });
-  }
-
-  Future<void> _scanPattern(String patternType) async {
-    final sym = _symbolCtrl.text.trim().toUpperCase();
-    if (sym.isEmpty || !_symbolValid) {
-      _snack('Validate the symbol first', isError: true);
-      return;
-    }
-    if (_selectedBotId.isEmpty) {
-      _snack('Select a bot to send the alert', isError: true);
-      return;
-    }
-
-    final bot = Config.bots.firstWhere((b) => b.id == _selectedBotId);
-    if (!bot.isConfigured) {
-      _snack('Selected bot is not configured', isError: true);
-      return;
-    }
-
-    setState(() => _scanning = true);
-    try {
-      final candles = await BinanceService.fetchCandles(sym, _selectedTf);
-      final res = CandlestickPatternService.detect(candles);
-
-      bool found = false;
-      double price = candles.last.close;
-      if (patternType == 'BE' && res.isBE) found = true;
-      if (patternType == 'MS' && res.isMS) found = true;
-      if (patternType == 'ES' && res.isES) found = true;
-
-      if (found) {
-        final ok = await TelegramService.sendPatternAlertToBot(
-          bot: bot,
-          patternType: patternType,
-          symbol: sym,
-          timeframe: _selectedTf,
-          price: price,
-        );
-        if (ok)
-          _snack('Pattern found and sent via ${bot.name}', isError: false);
-        else
-          _snack('Pattern found but failed to send', isError: true);
-      } else {
-        _snack('No $patternType pattern detected for $sym on $_selectedTf',
-            isError: true);
-      }
-    } catch (e) {
-      _snack('Failed to scan: $e', isError: true);
-    } finally {
-      if (mounted) setState(() => _scanning = false);
-    }
   }
 
   PriceAlert _build() {
@@ -839,87 +1162,7 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
                                       setState(() => _selectedBotId = bot.id),
                                 )),
 
-                      const SizedBox(height: 12),
-
-                      // ── Pattern finder (scan symbol/timeframe) ──
-                      _Label('Pattern Finder'),
-                      const SizedBox(height: 8),
-                      Row(children: [
-                        Expanded(
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: isDark
-                                  ? const Color(0xFF1A1A2E)
-                                  : Colors.grey.shade50,
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(
-                                  color: isDark
-                                      ? Colors.grey.shade700
-                                      : Colors.grey.shade300),
-                            ),
-                            child: Row(children: [
-                              const Icon(Icons.schedule,
-                                  size: 18, color: Colors.grey),
-                              const SizedBox(width: 8),
-                              const Text('Timeframe',
-                                  style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600)),
-                              const SizedBox(width: 10),
-                              const Spacer(),
-                              DropdownButtonHideUnderline(
-                                child: DropdownButton<String>(
-                                  value: _selectedTf,
-                                  items: Config.timeframes
-                                      .map((tf) => DropdownMenuItem(
-                                          value: tf, child: Text(tf)))
-                                      .toList(),
-                                  onChanged: (v) => setState(() {
-                                    if (v != null) _selectedTf = v;
-                                  }),
-                                ),
-                              ),
-                            ]),
-                          ),
-                        ),
-                      ]),
-                      const SizedBox(height: 8),
-
-                      Row(children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed:
-                                _scanning ? null : () => _scanPattern('BE'),
-                            child: _scanning
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2))
-                                : const Text('Find BE'),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed:
-                                _scanning ? null : () => _scanPattern('MS'),
-                            child: const Text('Find MS'),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed:
-                                _scanning ? null : () => _scanPattern('ES'),
-                            child: const Text('Find ES'),
-                          ),
-                        ),
-                      ]),
-
-                      const SizedBox(height: 18),
+                      const SizedBox(height: 28),
 
                       // ── Save button ────────────────────
                       SizedBox(

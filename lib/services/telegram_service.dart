@@ -1,5 +1,6 @@
 // ─── services/telegram_service.dart ─────────────────────
-// Sends alert messages to Telegram.
+// Sends HH/LL and manual price alerts to Telegram.
+// Each method routes to the correct bot(s).
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -26,54 +27,10 @@ class TelegramService {
     '1M': '1 Month',
   };
 
-  // ─── Credential guard ──────────────────────────────────
-  static bool _credentialsOk() {
-    if (Config.botToken.isEmpty ||
-        Config.botToken == 'YOUR_TELEGRAM_BOT_TOKEN') {
-      print('⚠️  Telegram bot token is not set. Skipping alert.');
-      return false;
-    }
-    if (Config.chatId.isEmpty || Config.chatId == 'YOUR_TELEGRAM_CHAT_ID') {
-      print('⚠️  Telegram chat ID is not set. Skipping alert.');
-      return false;
-    }
-    return true;
-  }
-
-  // ─── Generic send ──────────────────────────────────────
-  static Future<bool> _send(String message) async {
-    try {
-      final uri = Uri.parse('${_baseUrl}${Config.botToken}/sendMessage');
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'chat_id': Config.chatId,
-              'text': message,
-              'parse_mode': 'HTML',
-            }),
-          )
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        final body = jsonDecode(response.body);
-        if (body['ok'] == true) return true;
-        print('❌ Telegram API error: ${body['description']}');
-        return false;
-      }
-      print('❌ Telegram HTTP error: ${response.statusCode} — ${response.body}');
-      return false;
-    } catch (e) {
-      print('❌ Telegram network error: $e');
-      return false;
-    }
-  }
-
-  // -------------------------
-  // Multi-bot helpers (new flows)
-  // -------------------------
-  /// Send hit alert to all configured bots that subscribe to [timeframe].
+  // ──────────────────────────────────────────────────────
+  // ALERT TYPE 1: HIT — price touches an existing HH/LL
+  // Sends to all bots that have [timeframe] in hitTimeframes.
+  // ──────────────────────────────────────────────────────
   static Future<bool> sendHitAlert({
     required String levelType,
     required double levelPrice,
@@ -94,14 +51,17 @@ class TelegramService {
         '💰 <b>Current Price:</b> <code>${currentPrice.toStringAsFixed(5)}</code>\n'
         '📌 <b>Signal:</b>       ${isHH ? "Resistance hit — watch for reversal ↓" : "Support hit — watch for bounce ↑"}\n';
 
-    var anyOk = false;
+    bool anyOk = false;
     for (final bot in targets) {
       if (await _sendToBot(bot, msg)) anyOk = true;
     }
     return anyOk;
   }
 
-  /// Send new HH/LL level notification to subscribed bots.
+  // ──────────────────────────────────────────────────────
+  // ALERT TYPE 2: NEW — a brand-new HH/LL pivot forms
+  // Sends to all bots that have [timeframe] in newTimeframes.
+  // ──────────────────────────────────────────────────────
   static Future<bool> sendNewLevelAlert({
     required String levelType,
     required double levelPrice,
@@ -121,14 +81,17 @@ class TelegramService {
         '🎯 <b>Level Price:</b> <code>${levelPrice.toStringAsFixed(5)}</code>\n'
         '📌 <b>Signal:</b>      ${isHH ? "New resistance zone formed ↑" : "New support zone formed ↓"}\n';
 
-    var anyOk = false;
+    bool anyOk = false;
     for (final bot in targets) {
       if (await _sendToBot(bot, msg)) anyOk = true;
     }
     return anyOk;
   }
 
-  /// Send a manual price alert to a specific bot (multi-bot flow).
+  // ──────────────────────────────────────────────────────
+  // ALERT TYPE 3: PRICE ALERT — manually set price target
+  // Sends to a specific bot chosen by the user.
+  // ──────────────────────────────────────────────────────
   static Future<bool> sendPriceAlert({
     required TelegramBot bot,
     required PriceAlert alert,
@@ -158,6 +121,7 @@ class TelegramService {
 
     final dispLabel =
         alert.label.isNotEmpty ? alert.label : '${alert.symbol} Price Alert';
+
     final msg = '$emoji <b>Price Alert Triggered!</b>\n\n'
         '🏷 <b>Alert:</b>   $dispLabel\n'
         '📊 <b>Symbol:</b>  ${alert.symbol}\n'
@@ -168,7 +132,72 @@ class TelegramService {
     return _sendToBot(bot, msg);
   }
 
-  // Private helper to send for a TelegramBot object
+  // ──────────────────────────────────────────────────────
+  // ALERT TYPE 4: PATTERN ALERT — BE / MS / ES
+  // Sends to the specified bot configured on the PatternAlert
+  // ──────────────────────────────────────────────────────
+  static Future<bool> sendPatternAlert({
+    required TelegramBot bot,
+    required String pattern, // 'BE'|'MS'|'ES'
+    required String symbol,
+    required String timeframe,
+    required double price,
+  }) async {
+    if (!bot.isConfigured) return false;
+    final String emoji =
+        pattern == 'BE' ? '📈' : (pattern == 'MS' ? '🌅' : '🌙');
+    final String name = pattern == 'BE'
+        ? 'Bullish Engulfing'
+        : (pattern == 'MS' ? 'Morning Star' : 'Evening Star');
+    final msg = '$emoji <b>$name detected</b>\n\n'
+        '📊 <b>Symbol:</b>  $symbol\n'
+        '⏱ <b>Timeframe:</b> $timeframe\n'
+        '🎯 <b>Price:</b>    <code>${price.toStringAsFixed(5)}</code>\n'
+        '📌 <b>Pattern:</b>  $pattern\n';
+    return _sendToBot(bot, msg);
+  }
+
+  // ──────────────────────────────────────────────────────
+  // TEST connection for a specific bot
+  // ──────────────────────────────────────────────────────
+  static Future<String?> testConnection(TelegramBot bot) async {
+    if (!bot.isConfigured) {
+      return bot.token.isEmpty || bot.token == 'YOUR_TELEGRAM_BOT_TOKEN'
+          ? 'Bot token is not set'
+          : 'Chat ID is not set';
+    }
+    final hitTfs =
+        bot.hitTimeframes.isEmpty ? 'None' : bot.hitTimeframes.join(', ');
+    final newTfs =
+        bot.newTimeframes.isEmpty ? 'None' : bot.newTimeframes.join(', ');
+    try {
+      final uri = Uri.parse('${_baseUrl}${bot.token}/sendMessage');
+      final response = await http
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'chat_id': bot.chatId,
+              'text': '✅ <b>HH/LL Bot Connected!</b>\n\n'
+                  '🤖 Bot: <b>${bot.name}</b>\n\n'
+                  '🎯 Hit alert timeframes: <code>$hitTfs</code>\n'
+                  '✨ New level timeframes: <code>$newTfs</code>\n\n'
+                  'Bot is configured and ready.',
+              'parse_mode': 'HTML',
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      final body = jsonDecode(response.body);
+      if (response.statusCode == 200 && body['ok'] == true) return null;
+      return body['description'] as String? ?? 'Unknown Telegram error';
+    } catch (e) {
+      return 'Network error: $e';
+    }
+  }
+
+  // ──────────────────────────────────────────────────────
+  // PRIVATE: send one message to one bot
+  // ──────────────────────────────────────────────────────
   static Future<bool> _sendToBot(TelegramBot bot, String message) async {
     try {
       final uri = Uri.parse('${_baseUrl}${bot.token}/sendMessage');
@@ -183,217 +212,17 @@ class TelegramService {
             }),
           )
           .timeout(const Duration(seconds: 10));
-
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body);
         if (body['ok'] == true) return true;
-        print('❌ Telegram API error [${bot.name}]: ${body['description']}');
+        print('❌ Telegram error [${bot.name}]: ${body['description']}');
         return false;
       }
-      print(
-          '❌ Telegram HTTP error: ${response.statusCode} — ${response.body} [${bot.name}]');
+      print('❌ Telegram HTTP ${response.statusCode} [${bot.name}]');
       return false;
     } catch (e) {
       print('❌ Telegram network error [${bot.name}]: $e');
       return false;
-    }
-  }
-
-  /// Send a candlestick pattern alert to all configured bots.
-  static Future<bool> sendPatternAlertAll({
-    required String patternType,
-    required String symbol,
-    required String timeframe,
-    required double price,
-  }) async {
-    final patternNames = {
-      'BE': '🟢 Bullish Engulfing',
-      'MS': '☀️  Morning Star',
-      'ES': '🌙 Evening Star',
-    };
-    final patternSignals = {
-      'BE': 'Bullish reversal — engulfing bar absorbed prior selling ↑',
-      'MS': 'Bullish reversal after downtrend — watch for bounce ↑',
-      'ES': 'Bearish reversal after uptrend — watch for pullback ↓',
-    };
-    final patternDesc = {
-      'BE':
-          'A bullish candle fully engulfed the prior bearish candle (wick-to-wick).',
-      'MS': 'Large bearish candle → doji/star → bullish recovery candle.',
-      'ES': 'Large bullish candle → doji/star → bearish reversal candle.',
-    };
-
-    final name = patternNames[patternType] ?? patternType;
-    final signal = patternSignals[patternType] ?? '';
-    final desc = patternDesc[patternType] ?? '';
-    final tfName = _tfNames[timeframe] ?? timeframe;
-
-    final message = '$name Pattern Detected!\n\n'
-        '📊 <b>Symbol:</b>     $symbol\n'
-        '⏱ <b>Timeframe:</b> $tfName\n'
-        '💰 <b>Close:</b>     <code>${price.toStringAsFixed(5)}</code>\n'
-        '📌 <b>Signal:</b>    $signal\n\n'
-        '<i>$desc</i>\n';
-
-    var anyOk = false;
-    for (final bot in Config.bots.where((b) => b.isConfigured)) {
-      if (await _sendToBot(bot, message)) anyOk = true;
-    }
-    return anyOk;
-  }
-
-  /// Send a candlestick pattern alert to a specific bot.
-  static Future<bool> sendPatternAlertToBot({
-    required TelegramBot bot,
-    required String patternType,
-    required String symbol,
-    required String timeframe,
-    required double price,
-  }) async {
-    if (!bot.isConfigured) return false;
-
-    final patternNames = {
-      'BE': '🟢 Bullish Engulfing',
-      'MS': '☀️  Morning Star',
-      'ES': '🌙 Evening Star',
-    };
-    final patternSignals = {
-      'BE': 'Bullish reversal — engulfing bar absorbed prior selling ↑',
-      'MS': 'Bullish reversal after downtrend — watch for bounce ↑',
-      'ES': 'Bearish reversal after uptrend — watch for pullback ↓',
-    };
-    final patternDesc = {
-      'BE':
-          'A bullish candle fully engulfed the prior bearish candle (wick-to-wick).',
-      'MS': 'Large bearish candle → doji/star → bullish recovery candle.',
-      'ES': 'Large bullish candle → doji/star → bearish reversal candle.',
-    };
-
-    final name = patternNames[patternType] ?? patternType;
-    final signal = patternSignals[patternType] ?? '';
-    final desc = patternDesc[patternType] ?? '';
-    final tfName = _tfNames[timeframe] ?? timeframe;
-
-    final message = '$name Pattern Detected!\n\n'
-        '📊 <b>Symbol:</b>     $symbol\n'
-        '⏱ <b>Timeframe:</b> $tfName\n'
-        '💰 <b>Close:</b>     <code>${price.toStringAsFixed(5)}</code>\n'
-        '📌 <b>Signal:</b>    $signal\n\n'
-        '<i>$desc</i>\n';
-
-    return _sendToBot(bot, message);
-  }
-
-  // ══════════════════════════════════════════════════════
-  // ─── HH / LL ALERT ───────────────────────────────────
-  // ══════════════════════════════════════════════════════
-  static Future<bool> sendAlert({
-    required String levelType,
-    required double levelPrice,
-    required String timeframe,
-    required double currentPrice,
-    required String symbol,
-  }) async {
-    if (!_credentialsOk()) return false;
-
-    final bool isHH = levelType == 'HH';
-    final String emoji = isHH ? '🔴' : '🟢';
-    final String signal = isHH
-        ? 'Resistance hit — watch for reversal ↓'
-        : 'Support hit — watch for bounce ↑';
-    final String tfName = _tfNames[timeframe] ?? timeframe;
-
-    final message = '$emoji <b>$levelType Level Hit!</b>\n'
-        '\n'
-        '📊 <b>Symbol:</b>        $symbol\n'
-        '⏱ <b>Timeframe:</b>    $tfName\n'
-        '🎯 <b>Level Price:</b>  <code>${levelPrice.toStringAsFixed(5)}</code>\n'
-        '💰 <b>Current Price:</b> <code>${currentPrice.toStringAsFixed(5)}</code>\n'
-        '📌 <b>Signal:</b>       $signal\n';
-
-    return _send(message);
-  }
-
-  // ══════════════════════════════════════════════════════
-  // ─── CANDLESTICK PATTERN ALERT ───────────────────────
-  // ══════════════════════════════════════════════════════
-  /// [patternType] is one of: 'BE', 'MS', 'ES'
-  static Future<bool> sendPatternAlert({
-    required String patternType,
-    required String symbol,
-    required String timeframe,
-    required double price,
-  }) async {
-    if (!_credentialsOk()) return false;
-
-    const Map<String, String> _patternName = {
-      'BE': '🟢 Bullish Engulfing',
-      'MS': '☀️  Morning Star',
-      'ES': '🌙 Evening Star',
-    };
-
-    const Map<String, String> _patternSignal = {
-      'BE': 'Bullish reversal — engulfing bar absorbed prior selling ↑',
-      'MS': 'Bullish reversal after downtrend — watch for bounce ↑',
-      'ES': 'Bearish reversal after uptrend — watch for pullback ↓',
-    };
-
-    const Map<String, String> _patternDesc = {
-      'BE':
-          'A bullish candle fully engulfed the prior bearish candle (wick-to-wick).',
-      'MS': 'Large bearish candle → doji/star → bullish recovery candle.',
-      'ES': 'Large bullish candle → doji/star → bearish reversal candle.',
-    };
-
-    final name = _patternName[patternType] ?? patternType;
-    final signal = _patternSignal[patternType] ?? '';
-    final desc = _patternDesc[patternType] ?? '';
-    final tfName = _tfNames[timeframe] ?? timeframe;
-
-    final message = '$name Pattern Detected!\n'
-        '\n'
-        '📊 <b>Symbol:</b>     $symbol\n'
-        '⏱ <b>Timeframe:</b> $tfName\n'
-        '💰 <b>Close:</b>     <code>${price.toStringAsFixed(5)}</code>\n'
-        '📌 <b>Signal:</b>    $signal\n'
-        '\n'
-        '<i>$desc</i>\n';
-
-    return _send(message);
-  }
-
-  // ══════════════════════════════════════════════════════
-  // ─── TEST CONNECTION ─────────────────────────────────
-  // ══════════════════════════════════════════════════════
-  static Future<String?> testConnection() async {
-    if (Config.botToken.isEmpty ||
-        Config.botToken == 'YOUR_TELEGRAM_BOT_TOKEN') {
-      return 'Bot token is not set';
-    }
-    if (Config.chatId.isEmpty || Config.chatId == 'YOUR_TELEGRAM_CHAT_ID') {
-      return 'Chat ID is not set';
-    }
-
-    try {
-      final uri = Uri.parse('${_baseUrl}${Config.botToken}/sendMessage');
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'chat_id': Config.chatId,
-              'text':
-                  '✅ <b>HH/LL Bot Connected!</b>\n\nYour bot is configured correctly and ready to send HH/LL and candlestick pattern alerts.',
-              'parse_mode': 'HTML',
-            }),
-          )
-          .timeout(const Duration(seconds: 10));
-
-      final body = jsonDecode(response.body);
-      if (response.statusCode == 200 && body['ok'] == true) return null;
-      return body['description'] ?? 'Unknown Telegram error';
-    } catch (e) {
-      return 'Network error: $e';
     }
   }
 }
