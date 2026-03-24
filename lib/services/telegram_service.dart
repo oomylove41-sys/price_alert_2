@@ -10,21 +10,11 @@ class TelegramService {
   static const String _baseUrl = 'https://api.telegram.org/bot';
 
   static const Map<String, String> _tfNames = {
-    '1m': '1 Minute',
-    '3m': '3 Minutes',
-    '5m': '5 Minutes',
-    '15m': '15 Minutes',
-    '30m': '30 Minutes',
-    '1h': '1 Hour',
-    '2h': '2 Hours',
-    '4h': '4 Hours',
-    '6h': '6 Hours',
-    '8h': '8 Hours',
-    '12h': '12 Hours',
-    '1d': '1 Day',
-    '3d': '3 Days',
-    '1w': '1 Week',
-    '1M': '1 Month',
+    '1m':  '1 Minute',   '3m':  '3 Minutes',  '5m':  '5 Minutes',
+    '15m': '15 Minutes', '30m': '30 Minutes',  '1h':  '1 Hour',
+    '2h':  '2 Hours',    '4h':  '4 Hours',     '6h':  '6 Hours',
+    '8h':  '8 Hours',    '12h': '12 Hours',    '1d':  '1 Day',
+    '3d':  '3 Days',     '1w':  '1 Week',      '1M':  '1 Month',
   };
 
   // ──────────────────────────────────────────────────────
@@ -38,13 +28,14 @@ class TelegramService {
     required double currentPrice,
     required String symbol,
   }) async {
-    final targets = Config.bots
-        .where((b) => b.isConfigured && b.hitTimeframes.contains(timeframe));
+    final targets = Config.bots.where(
+        (b) => b.isConfigured && b.hitTimeframes.contains(timeframe));
     if (targets.isEmpty) return false;
 
-    final isHH = levelType == 'HH';
+    final isHH  = levelType == 'HH';
     final tfName = _tfNames[timeframe] ?? timeframe;
-    final msg = '${isHH ? "🔴" : "🟢"} <b>$levelType Level Hit!</b>\n\n'
+    final msg =
+        '${isHH ? "🔴" : "🟢"} <b>$levelType Level Hit!</b>\n\n'
         '📊 <b>Symbol:</b>        $symbol\n'
         '⏱ <b>Timeframe:</b>    $tfName\n'
         '🎯 <b>Level Price:</b>  <code>${levelPrice.toStringAsFixed(5)}</code>\n'
@@ -68,12 +59,12 @@ class TelegramService {
     required String timeframe,
     required String symbol,
   }) async {
-    final targets = Config.bots
-        .where((b) => b.isConfigured && b.newTimeframes.contains(timeframe));
+    final targets = Config.bots.where(
+        (b) => b.isConfigured && b.newTimeframes.contains(timeframe));
     if (targets.isEmpty) return false;
 
-    final isHH = levelType == 'HH';
-    final tfName = _tfNames[timeframe] ?? timeframe;
+    final isHH   = levelType == 'HH';
+    final tfName  = _tfNames[timeframe] ?? timeframe;
     final msg =
         '${isHH ? "📈" : "📉"} <b>New ${isHH ? "Higher High" : "Lower Low"} Formed!</b>\n\n'
         '📊 <b>Symbol:</b>       $symbol\n'
@@ -94,8 +85,8 @@ class TelegramService {
   // ──────────────────────────────────────────────────────
   static Future<bool> sendPriceAlert({
     required TelegramBot bot,
-    required PriceAlert alert,
-    required double currentPrice,
+    required PriceAlert  alert,
+    required double      currentPrice,
   }) async {
     if (!bot.isConfigured) return false;
 
@@ -103,57 +94,34 @@ class TelegramService {
     final String signal;
     switch (alert.condition) {
       case 'above':
-        emoji = '🚀';
+        emoji  = '🚀';
         signal = 'Price crossed above ${alert.targetPrice.toStringAsFixed(5)}';
         break;
       case 'below':
-        emoji = '📉';
+        emoji  = '📉';
         signal = 'Price crossed below ${alert.targetPrice.toStringAsFixed(5)}';
         break;
       case 'touch':
-        emoji = '🎯';
+        emoji  = '🎯';
         signal = 'Price touched ${alert.targetPrice.toStringAsFixed(5)}';
         break;
       default:
-        emoji = '🔔';
+        emoji  = '🔔';
         signal = 'Price reached ${alert.targetPrice.toStringAsFixed(5)}';
     }
 
-    final dispLabel =
-        alert.label.isNotEmpty ? alert.label : '${alert.symbol} Price Alert';
+    final dispLabel = alert.label.isNotEmpty
+        ? alert.label
+        : '${alert.symbol} Price Alert';
 
-    final msg = '$emoji <b>Price Alert Triggered!</b>\n\n'
+    final msg =
+        '$emoji <b>Price Alert Triggered!</b>\n\n'
         '🏷 <b>Alert:</b>   $dispLabel\n'
         '📊 <b>Symbol:</b>  ${alert.symbol}\n'
         '🎯 <b>Target:</b>  <code>${alert.targetPrice.toStringAsFixed(5)}</code>\n'
         '💰 <b>Current:</b> <code>${currentPrice.toStringAsFixed(5)}</code>\n'
         '📌 <b>Signal:</b>  $signal\n';
 
-    return _sendToBot(bot, msg);
-  }
-
-  // ──────────────────────────────────────────────────────
-  // ALERT TYPE 4: PATTERN ALERT — BE / MS / ES
-  // Sends to the specified bot configured on the PatternAlert
-  // ──────────────────────────────────────────────────────
-  static Future<bool> sendPatternAlert({
-    required TelegramBot bot,
-    required String pattern, // 'BE'|'MS'|'ES'
-    required String symbol,
-    required String timeframe,
-    required double price,
-  }) async {
-    if (!bot.isConfigured) return false;
-    final String emoji =
-        pattern == 'BE' ? '📈' : (pattern == 'MS' ? '🌅' : '🌙');
-    final String name = pattern == 'BE'
-        ? 'Bullish Engulfing'
-        : (pattern == 'MS' ? 'Morning Star' : 'Evening Star');
-    final msg = '$emoji <b>$name detected</b>\n\n'
-        '📊 <b>Symbol:</b>  $symbol\n'
-        '⏱ <b>Timeframe:</b> $timeframe\n'
-        '🎯 <b>Price:</b>    <code>${price.toStringAsFixed(5)}</code>\n'
-        '📌 <b>Pattern:</b>  $pattern\n';
     return _sendToBot(bot, msg);
   }
 
@@ -166,27 +134,24 @@ class TelegramService {
           ? 'Bot token is not set'
           : 'Chat ID is not set';
     }
-    final hitTfs =
-        bot.hitTimeframes.isEmpty ? 'None' : bot.hitTimeframes.join(', ');
-    final newTfs =
-        bot.newTimeframes.isEmpty ? 'None' : bot.newTimeframes.join(', ');
+    final hitTfs = bot.hitTimeframes.isEmpty ? 'None' : bot.hitTimeframes.join(', ');
+    final newTfs = bot.newTimeframes.isEmpty ? 'None' : bot.newTimeframes.join(', ');
     try {
-      final uri = Uri.parse('${_baseUrl}${bot.token}/sendMessage');
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'chat_id': bot.chatId,
-              'text': '✅ <b>HH/LL Bot Connected!</b>\n\n'
-                  '🤖 Bot: <b>${bot.name}</b>\n\n'
-                  '🎯 Hit alert timeframes: <code>$hitTfs</code>\n'
-                  '✨ New level timeframes: <code>$newTfs</code>\n\n'
-                  'Bot is configured and ready.',
-              'parse_mode': 'HTML',
-            }),
-          )
-          .timeout(const Duration(seconds: 10));
+      final uri      = Uri.parse('${_baseUrl}${bot.token}/sendMessage');
+      final response = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'chat_id': bot.chatId,
+          'text':
+              '✅ <b>HH/LL Bot Connected!</b>\n\n'
+              '🤖 Bot: <b>${bot.name}</b>\n\n'
+              '🎯 Hit alert timeframes: <code>$hitTfs</code>\n'
+              '✨ New level timeframes: <code>$newTfs</code>\n\n'
+              'Bot is configured and ready.',
+          'parse_mode': 'HTML',
+        }),
+      ).timeout(const Duration(seconds: 10));
       final body = jsonDecode(response.body);
       if (response.statusCode == 200 && body['ok'] == true) return null;
       return body['description'] as String? ?? 'Unknown Telegram error';
@@ -200,18 +165,16 @@ class TelegramService {
   // ──────────────────────────────────────────────────────
   static Future<bool> _sendToBot(TelegramBot bot, String message) async {
     try {
-      final uri = Uri.parse('${_baseUrl}${bot.token}/sendMessage');
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'chat_id': bot.chatId,
-              'text': message,
-              'parse_mode': 'HTML',
-            }),
-          )
-          .timeout(const Duration(seconds: 10));
+      final uri      = Uri.parse('${_baseUrl}${bot.token}/sendMessage');
+      final response = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'chat_id':    bot.chatId,
+          'text':       message,
+          'parse_mode': 'HTML',
+        }),
+      ).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body);
         if (body['ok'] == true) return true;

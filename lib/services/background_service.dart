@@ -14,25 +14,22 @@ import '../config.dart';
 import 'binance_service.dart';
 import 'pivot_service.dart';
 import 'telegram_service.dart';
-import 'pattern_service.dart';
 
 Timer? _checkTimer;
-bool _isBusy = false;
-bool _shouldStop = false;
+bool   _isBusy     = false;
+bool   _shouldStop = false;
 
 // ─── Init ─────────────────────────────────────────────────
 Future<void> initBackgroundService() async {
   final service = FlutterBackgroundService();
 
   const AndroidNotificationChannel channel = AndroidNotificationChannel(
-    'hh_ll_bot_channel',
-    'HH/LL Bot',
+    'hh_ll_bot_channel', 'HH/LL Bot',
     description: 'Running HH/LL Alert Bot',
     importance: Importance.low,
   );
 
-  final FlutterLocalNotificationsPlugin plugin =
-      FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin plugin = FlutterLocalNotificationsPlugin();
   await plugin
       .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>()
@@ -40,92 +37,20 @@ Future<void> initBackgroundService() async {
 
   await service.configure(
     androidConfiguration: AndroidConfiguration(
-      onStart: onBackgroundStart,
-      autoStart: false,
-      isForegroundMode: true,
-      notificationChannelId: 'hh_ll_bot_channel',
-      initialNotificationTitle: 'HH/LL Bot',
-      initialNotificationContent: 'Bot is running...',
+      onStart:                         onBackgroundStart,
+      autoStart:                       false,
+      isForegroundMode:                true,
+      notificationChannelId:           'hh_ll_bot_channel',
+      initialNotificationTitle:        'HH/LL Bot',
+      initialNotificationContent:      'Bot is running...',
       foregroundServiceNotificationId: 888,
     ),
     iosConfiguration: IosConfiguration(
-      autoStart: false,
+      autoStart:    false,
       onForeground: onBackgroundStart,
       onBackground: onIosBackground,
     ),
   );
-}
-
-// ─── Pattern detection for one symbol + timeframe (top-level) ───────
-Future<void> _checkPatterns(
-  String symbol,
-  String timeframe,
-  SharedPreferences prefs,
-  ServiceInstance service,
-) async {
-  try {
-    final candles = await BinanceService.fetchCandles(symbol, timeframe);
-    if (candles.length < 4) return;
-
-    final hits = PatternService.detectOnLastClosed(candles);
-    if (hits.isEmpty) return;
-
-    for (final hit in hits) {
-      if (_shouldStop) return;
-
-      final key =
-          'PAT_${hit.pattern}_${symbol}_${timeframe}_${hit.price.toStringAsFixed(5)}';
-      if (prefs.getBool(key) ?? false) continue;
-
-      // Find pattern alerts that match this symbol and pattern
-      final matching = Config.patternAlerts.where((p) {
-        if (!p.isActive) return false;
-        if (p.symbol.toUpperCase() != symbol.toUpperCase()) return false;
-        if (!p.patterns.contains(hit.pattern)) return false;
-        if (p.timeframes.isNotEmpty && !p.timeframes.contains(timeframe))
-          return false;
-        return true;
-      }).toList();
-
-      bool anyOk = false;
-      for (final alert in matching) {
-        TelegramBot? bot;
-        try {
-          bot = Config.bots.firstWhere((b) => b.id == alert.botId);
-        } catch (_) {
-          bot = null;
-        }
-        if (bot == null || !bot.isConfigured) {
-          print(
-              '⚠️ No configured bot for pattern alert ${alert.id} — skipping');
-          continue;
-        }
-        final ok = await TelegramService.sendPatternAlert(
-          bot: bot,
-          pattern: hit.pattern,
-          symbol: symbol,
-          timeframe: timeframe,
-          price: hit.price,
-        );
-        if (ok) anyOk = true;
-      }
-
-      if (anyOk) {
-        await prefs.setBool(key, true);
-        service.invoke('alert', {
-          'symbol': symbol,
-          'type': hit.pattern,
-          'kind': 'pattern',
-          'price': hit.price,
-          'timeframe': timeframe,
-          'time': DateTime.now().toIso8601String(),
-        });
-        print('🔔 PATTERN $symbol ${hit.pattern} @ ${hit.price} ($timeframe)');
-      }
-    }
-  } catch (e) {
-    print('❌ Pattern check error on $symbol $timeframe: $e');
-  }
 }
 
 @pragma('vm:entry-point')
@@ -140,7 +65,7 @@ void onBackgroundStart(ServiceInstance service) async {
   WidgetsFlutterBinding.ensureInitialized();
 
   _shouldStop = false;
-  _isBusy = false;
+  _isBusy     = false;
   _checkTimer?.cancel();
   _checkTimer = null;
 
@@ -168,27 +93,22 @@ void onBackgroundStart(ServiceInstance service) async {
     if (data['bots'] != null) {
       try {
         Config.bots = (data['bots'] as List)
-            .map((j) =>
-                TelegramBot.fromJson(Map<String, dynamic>.from(j as Map)))
+            .map((j) => TelegramBot.fromJson(
+                Map<String, dynamic>.from(j as Map)))
             .toList();
-      } catch (e) {
-        print('⚠️ Bots parse error: $e');
-      }
+      } catch (e) { print('⚠️ Bots parse error: $e'); }
     }
     if (data['priceAlerts'] != null) {
       try {
         Config.priceAlerts = (data['priceAlerts'] as List)
-            .map(
-                (j) => PriceAlert.fromJson(Map<String, dynamic>.from(j as Map)))
+            .map((j) => PriceAlert.fromJson(
+                Map<String, dynamic>.from(j as Map)))
             .toList();
-      } catch (e) {
-        print('⚠️ PriceAlerts parse error: $e');
-      }
+      } catch (e) { print('⚠️ PriceAlerts parse error: $e'); }
     }
-    if (data['symbols'] != null)
-      Config.symbols = List<String>.from(data['symbols'] as List);
-    if (data['pivotLen'] != null) Config.pivotLen = data['pivotLen'] as int;
-    if (data['limit'] != null) Config.limit = data['limit'] as int;
+    if (data['symbols']  != null) Config.symbols   = List<String>.from(data['symbols']  as List);
+    if (data['pivotLen'] != null) Config.pivotLen   = data['pivotLen'] as int;
+    if (data['limit']    != null) Config.limit      = data['limit']    as int;
     if (data['checkEveryMinutes'] != null) {
       final newInterval = data['checkEveryMinutes'] as int;
       if (newInterval != Config.checkEveryMinutes) {
@@ -209,14 +129,8 @@ void _restartTimer(ServiceInstance service) {
   _checkTimer = Timer.periodic(
     Duration(minutes: Config.checkEveryMinutes),
     (timer) async {
-      if (_shouldStop) {
-        timer.cancel();
-        return;
-      }
-      if (_isBusy) {
-        print('⏳ Skipping tick — still busy');
-        return;
-      }
+      if (_shouldStop) { timer.cancel(); return; }
+      if (_isBusy) { print('⏳ Skipping tick — still busy'); return; }
       await ConfigService.load();
       await _runAllChecks(service);
     },
@@ -230,16 +144,16 @@ Future<void> _runAllChecks(ServiceInstance service) async {
   _isBusy = true;
 
   try {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs      = await SharedPreferences.getInstance();
     await prefs.reload();
     final timeframes = Config.effectiveTimeframes;
-    final now = DateTime.now();
-    final timeStr = '${now.hour.toString().padLeft(2, '0')}:'
-        '${now.minute.toString().padLeft(2, '0')}';
+    final now        = DateTime.now();
+    final timeStr    = '${now.hour.toString().padLeft(2,'0')}:'
+                       '${now.minute.toString().padLeft(2,'0')}';
 
     if (service is AndroidServiceInstance) {
       service.setForegroundNotificationInfo(
-        title: 'HH/LL Bot — $timeStr',
+        title:   'HH/LL Bot — $timeStr',
         content: '${Config.symbols.length} pairs · ${timeframes.join(', ')}',
       );
     }
@@ -252,13 +166,13 @@ Future<void> _runAllChecks(ServiceInstance service) async {
         for (final tf in timeframes) {
           if (_shouldStop) return;
           await _checkHHLL(symbol, tf, prefs, service);
-          await _checkPatterns(symbol, tf, prefs, service);
         }
       }
     }
 
     // ── Manual price alerts ──────────────────────────────
     await _checkPriceAlerts(prefs, service);
+
   } catch (e) {
     print('❌ Error in _runAllChecks: $e');
   } finally {
@@ -268,43 +182,34 @@ Future<void> _runAllChecks(ServiceInstance service) async {
 
 // ─── HH/LL check for one symbol + timeframe ───────────────
 Future<void> _checkHHLL(
-  String symbol,
-  String timeframe,
-  SharedPreferences prefs,
-  ServiceInstance service,
+  String symbol, String timeframe,
+  SharedPreferences prefs, ServiceInstance service,
 ) async {
   try {
     final candles = await BinanceService.fetchCandles(symbol, timeframe);
     if (candles.length < 2) return;
 
-    final result = PivotService.getHHLL(candles);
+    final result     = PivotService.getHHLL(candles);
     final lastClosed = candles[candles.length - 2];
     final liveCandle = candles[candles.length - 1];
 
     // Alert type 1 — HIT
     Future<void> checkHit(String type, double? level, bool isHH) async {
       if (level == null) return;
-      final key =
-          '${type}_HIT_${symbol}_${timeframe}_${level.toStringAsFixed(5)}';
+      final key = '${type}_HIT_${symbol}_${timeframe}_${level.toStringAsFixed(5)}';
       if (prefs.getBool(key) ?? false) return;
       final isHit = PivotService.isHit(lastClosed, level, isHH) ||
-          PivotService.isHit(liveCandle, level, isHH);
+                    PivotService.isHit(liveCandle,  level, isHH);
       if (!isHit) return;
       final ok = await TelegramService.sendHitAlert(
-        levelType: type,
-        levelPrice: level,
-        timeframe: timeframe,
-        currentPrice: liveCandle.close,
-        symbol: symbol,
+        levelType: type, levelPrice: level,
+        timeframe: timeframe, currentPrice: liveCandle.close, symbol: symbol,
       );
       if (ok) {
         await prefs.setBool(key, true);
         service.invoke('alert', {
-          'symbol': symbol,
-          'type': type,
-          'kind': 'hit',
-          'price': level,
-          'timeframe': timeframe,
+          'symbol': symbol, 'type': type, 'kind': 'hit',
+          'price': level, 'timeframe': timeframe,
           'time': DateTime.now().toIso8601String(),
         });
         print('✅ HIT $symbol $type @ $level ($timeframe)');
@@ -314,23 +219,17 @@ Future<void> _checkHHLL(
     // Alert type 2 — NEW LEVEL
     Future<void> checkNew(String type, double? level) async {
       if (level == null) return;
-      final key =
-          '${type}_NEW_${symbol}_${timeframe}_${level.toStringAsFixed(5)}';
+      final key = '${type}_NEW_${symbol}_${timeframe}_${level.toStringAsFixed(5)}';
       if (prefs.getBool(key) ?? false) return;
       final ok = await TelegramService.sendNewLevelAlert(
-        levelType: type,
-        levelPrice: level,
-        timeframe: timeframe,
-        symbol: symbol,
+        levelType: type, levelPrice: level,
+        timeframe: timeframe, symbol: symbol,
       );
       await prefs.setBool(key, true);
       if (ok) {
         service.invoke('alert', {
-          'symbol': symbol,
-          'type': type,
-          'kind': 'new',
-          'price': level,
-          'timeframe': timeframe,
+          'symbol': symbol, 'type': type, 'kind': 'new',
+          'price': level, 'timeframe': timeframe,
           'time': DateTime.now().toIso8601String(),
         });
         print('✨ NEW $symbol $type @ $level ($timeframe)');
@@ -365,7 +264,7 @@ Future<void> _checkPriceAlerts(
   for (final entry in bySymbol.entries) {
     if (_shouldStop) break;
 
-    final symbol = entry.key;
+    final symbol       = entry.key;
     final currentPrice = await BinanceService.getCurrentPrice(symbol);
     if (currentPrice == null) {
       print('⚠️ Could not get price for $symbol — skipping');
@@ -382,9 +281,9 @@ Future<void> _checkPriceAlerts(
       } catch (_) {
         // Bot deleted — fall back to first bot with manual alerts enabled
         try {
-          bot = Config.bots
-              .firstWhere((b) => b.isConfigured && b.canReceiveManualAlerts);
-        } catch (_) {/* none available */}
+          bot = Config.bots.firstWhere(
+              (b) => b.isConfigured && b.canReceiveManualAlerts);
+        } catch (_) { /* none available */ }
       }
 
       if (bot == null || !bot.isConfigured) {
@@ -396,8 +295,8 @@ Future<void> _checkPriceAlerts(
       }
 
       final ok = await TelegramService.sendPriceAlert(
-        bot: bot,
-        alert: alert,
+        bot:          bot,
+        alert:        alert,
         currentPrice: currentPrice,
       );
 
@@ -407,16 +306,15 @@ Future<void> _checkPriceAlerts(
 
       if (ok) {
         service.invoke('priceAlert', {
-          'id': alert.id,
-          'symbol': alert.symbol,
-          'label': alert.label,
+          'id':          alert.id,
+          'symbol':      alert.symbol,
+          'label':       alert.label,
           'targetPrice': alert.targetPrice,
           'currentPrice': currentPrice,
-          'condition': alert.condition,
-          'time': DateTime.now().toIso8601String(),
+          'condition':   alert.condition,
+          'time':        DateTime.now().toIso8601String(),
         });
-        print(
-            '🔔 PRICE ALERT: ${alert.label.isNotEmpty ? alert.label : alert.symbol} '
+        print('🔔 PRICE ALERT: ${alert.label.isNotEmpty ? alert.label : alert.symbol} '
             '@ $currentPrice (target ${alert.targetPrice})');
       } else {
         print('❌ Price alert send failed for ${alert.symbol}');
