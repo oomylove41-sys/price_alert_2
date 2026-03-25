@@ -19,8 +19,7 @@ class TelegramService {
   };
 
   // ──────────────────────────────────────────────────────
-  // ALERT TYPE 1: HIT — price touches an existing HH/LL
-  // Sends to all bots that have [timeframe] in hitTimeframes.
+  // ALERT TYPE 1: HIT
   // ──────────────────────────────────────────────────────
   static Future<bool> sendHitAlert({
     required String levelType,
@@ -33,7 +32,7 @@ class TelegramService {
         (b) => b.isConfigured && b.hitTimeframes.contains(timeframe));
     if (targets.isEmpty) return false;
 
-    final isHH  = levelType == 'HH';
+    final isHH   = levelType == 'HH';
     final tfName = _tfNames[timeframe] ?? timeframe;
     final msg =
         '${isHH ? "🔴" : "🟢"} <b>$levelType Level Hit!</b>\n\n'
@@ -51,8 +50,7 @@ class TelegramService {
   }
 
   // ──────────────────────────────────────────────────────
-  // ALERT TYPE 2: NEW — a brand-new HH/LL pivot forms
-  // Sends to all bots that have [timeframe] in newTimeframes.
+  // ALERT TYPE 2: NEW LEVEL
   // ──────────────────────────────────────────────────────
   static Future<bool> sendNewLevelAlert({
     required String levelType,
@@ -64,8 +62,8 @@ class TelegramService {
         (b) => b.isConfigured && b.newTimeframes.contains(timeframe));
     if (targets.isEmpty) return false;
 
-    final isHH   = levelType == 'HH';
-    final tfName  = _tfNames[timeframe] ?? timeframe;
+    final isHH  = levelType == 'HH';
+    final tfName = _tfNames[timeframe] ?? timeframe;
     final msg =
         '${isHH ? "📈" : "📉"} <b>New ${isHH ? "Higher High" : "Lower Low"} Formed!</b>\n\n'
         '📊 <b>Symbol:</b>       $symbol\n'
@@ -81,8 +79,7 @@ class TelegramService {
   }
 
   // ──────────────────────────────────────────────────────
-  // ALERT TYPE 3: PRICE ALERT — manually set price target
-  // Sends to a specific bot chosen by the user.
+  // ALERT TYPE 3: PRICE ALERT
   // ──────────────────────────────────────────────────────
   static Future<bool> sendPriceAlert({
     required TelegramBot bot,
@@ -127,19 +124,23 @@ class TelegramService {
   }
 
   // ──────────────────────────────────────────────────────
-  // ALERT TYPE 4: CANDLE PATTERN — BE / MS / ES detected
-  // Sends to the specific bot chosen by the user for the alert.
+  // ALERT TYPE 4: CANDLE PATTERN
+  // Called once per detected (pattern × timeframe) combo.
+  // [pattern]   — the specific code that fired: 'BE', 'MS', or 'ES'
+  // [timeframe] — the specific timeframe on which it fired
   // ──────────────────────────────────────────────────────
   static Future<bool> sendCandlePatternAlert({
     required TelegramBot        bot,
     required CandlePatternAlert alert,
+    required String             pattern,
+    required String             timeframe,
     required double             livePrice,
     required DateTime           signalTime,
   }) async {
     if (!bot.isConfigured) return false;
 
-    final patternEnum = CandlePatternExt.fromString(alert.pattern);
-    final tfName      = _tfNames[alert.timeframe] ?? alert.timeframe;
+    final patternEnum = CandlePatternExt.fromString(pattern);
+    final tfName      = _tfNames[timeframe] ?? timeframe;
     final dispLabel   = alert.label.isNotEmpty
         ? alert.label
         : '${alert.symbol} — ${patternEnum.label}';
@@ -191,7 +192,7 @@ class TelegramService {
         uri,
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'chat_id': bot.chatId,
+          'chat_id':    bot.chatId,
           'text':
               '✅ <b>HH/LL Bot Connected!</b>\n\n'
               '🤖 Bot: <b>${bot.name}</b>\n\n'

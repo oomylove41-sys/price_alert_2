@@ -1,8 +1,7 @@
 // ─── screens/candle_pattern_alerts_screen.dart ───────────
 // Candle pattern alert management.
-// Each alert watches one symbol + timeframe and fires when
-// a BE, MS, or ES candlestick pattern is detected on a
-// newly closed candle.
+// Each alert watches one symbol, one or more patterns
+// (BE / MS / ES), and one or more timeframes.
 
 import 'package:flutter/material.dart';
 import '../config.dart';
@@ -30,13 +29,11 @@ class _CandlePatternAlertsScreenState
     _load();
   }
 
-  void _load() {
-    setState(() => _alerts = List.from(Config.candlePatternAlerts));
-  }
+  void _load() =>
+      setState(() => _alerts = List.from(Config.candlePatternAlerts));
 
-  Future<void> _save() async {
-    await ConfigService.saveCandlePatternAlerts(_alerts);
-  }
+  Future<void> _save() async =>
+      ConfigService.saveCandlePatternAlerts(_alerts);
 
   Future<void> _openEdit(CandlePatternAlert? existing) async {
     final result = await showModalBottomSheet<CandlePatternAlert>(
@@ -58,9 +55,7 @@ class _CandlePatternAlertsScreenState
   Future<void> _toggleActive(CandlePatternAlert alert) async {
     setState(() {
       final idx = _alerts.indexWhere((a) => a.id == alert.id);
-      if (idx >= 0) {
-        _alerts[idx] = alert.copyWith(isActive: !alert.isActive);
-      }
+      if (idx >= 0) _alerts[idx] = alert.copyWith(isActive: !alert.isActive);
     });
     await _save();
   }
@@ -68,7 +63,7 @@ class _CandlePatternAlertsScreenState
   Future<void> _delete(CandlePatternAlert alert) async {
     final label = alert.label.isNotEmpty
         ? alert.label
-        : '${alert.symbol} ${alert.pattern}';
+        : '${alert.symbol} pattern alert';
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -112,8 +107,8 @@ class _CandlePatternAlertsScreenState
                 onPressed: () => _openEdit(null),
                 icon: const Icon(Icons.add_rounded, size: 18),
                 label: const Text('Add'),
-                style: TextButton.styleFrom(
-                    foregroundColor: Colors.blueAccent),
+                style:
+                    TextButton.styleFrom(foregroundColor: Colors.blueAccent),
               ),
             ),
         ],
@@ -142,7 +137,7 @@ class _CandlePatternAlertsScreenState
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Text(
-            'Get notified when BE, MS, or ES patterns\nappear on any symbol and timeframe.',
+            'Watch BE, MS, or ES patterns across\nmultiple symbols and timeframes.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
           ),
@@ -204,17 +199,15 @@ class _SectionLabel extends StatelessWidget {
   const _SectionLabel(this.text);
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Text(text,
-          style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: Colors.grey.shade500,
-              letterSpacing: 0.8)),
-    );
-  }
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Text(text,
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: Colors.grey.shade500,
+                letterSpacing: 0.8)),
+      );
 }
 
 // ─── Alert card ───────────────────────────────────────────
@@ -233,17 +226,19 @@ class _AlertCard extends StatelessWidget {
     required this.onDelete,
   });
 
+  // Border colour: red if ES-only, green if bullish-only, teal if mixed
   Color get _borderColor {
     if (!alert.isActive) return Colors.grey.shade500;
-    final p = CandlePatternExt.fromString(alert.pattern);
-    if (p == CandlePattern.ES) return Colors.redAccent.shade200;
+    final hasBull = alert.patterns.any((p) => p == 'BE' || p == 'MS');
+    final hasBear = alert.patterns.contains('ES');
+    if (hasBull && hasBear) return Colors.teal.shade400;
+    if (hasBear) return Colors.redAccent.shade200;
     return Colors.green.shade400;
   }
 
   @override
   Widget build(BuildContext context) {
-    final patternEnum = CandlePatternExt.fromString(alert.pattern);
-    final cardBg      = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+    final cardBg = isDark ? const Color(0xFF1E1E2E) : Colors.white;
 
     // Bot name
     String botName = 'Unknown Bot';
@@ -253,6 +248,21 @@ class _AlertCard extends StatelessWidget {
 
     final statusText  = alert.isActive ? 'Watching' : 'Paused';
     final statusColor = alert.isActive ? Colors.blueAccent : Colors.grey.shade500;
+
+    // Pattern chips
+    final patternChips = alert.patterns.map((p) {
+      final e = CandlePatternExt.fromString(p);
+      return _MiniChip(
+        label: '${e.emoji} ${e.shortLabel}',
+        color: e.isBullish ? Colors.green.shade400 : Colors.redAccent.shade200,
+        isDark: isDark,
+      );
+    }).toList();
+
+    // Timeframe chips — show first 5, then "+N more"
+    final tfs          = alert.timeframes;
+    final tfDisplay    = tfs.take(5).toList();
+    final tfOverflow   = tfs.length - 5;
 
     return GestureDetector(
       onTap: onEdit,
@@ -264,10 +274,9 @@ class _AlertCard extends StatelessWidget {
           border: Border(left: BorderSide(color: _borderColor, width: 4)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
-            ),
+                color: Colors.black.withOpacity(0.05),
+                blurRadius: 6,
+                offset: const Offset(0, 2)),
           ],
         ),
         child: Padding(
@@ -294,28 +303,34 @@ class _AlertCard extends StatelessWidget {
                               fontSize: 11.5,
                               color: Colors.grey.shade500)),
 
+                    const SizedBox(height: 8),
+
+                    // Pattern chips row
+                    Wrap(spacing: 4, runSpacing: 4,
+                        children: patternChips),
+
                     const SizedBox(height: 6),
 
-                    // Pattern + timeframe
-                    Row(children: [
-                      Text(patternEnum.emoji,
-                          style: const TextStyle(fontSize: 14)),
-                      const SizedBox(width: 6),
-                      Text(
-                        '${patternEnum.label}  ·  ${alert.timeframe}',
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w500,
-                          color: !alert.isActive
-                              ? Colors.grey.shade400
-                              : (patternEnum.isBullish
-                                  ? Colors.green.shade400
-                                  : Colors.redAccent.shade200),
-                        ),
-                      ),
-                    ]),
+                    // Timeframe chips row
+                    Wrap(
+                      spacing: 4,
+                      runSpacing: 4,
+                      children: [
+                        ...tfDisplay.map((tf) => _MiniChip(
+                              label: tf,
+                              color: Colors.blueAccent,
+                              isDark: isDark,
+                            )),
+                        if (tfOverflow > 0)
+                          _MiniChip(
+                            label: '+$tfOverflow',
+                            color: Colors.grey.shade500,
+                            isDark: isDark,
+                          ),
+                      ],
+                    ),
 
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 6),
 
                     // Bot name + status badge
                     Row(children: [
@@ -370,6 +385,30 @@ class _AlertCard extends StatelessWidget {
   }
 }
 
+// ─── Mini chip used inside the card ──────────────────────
+class _MiniChip extends StatelessWidget {
+  final String label;
+  final Color  color;
+  final bool   isDark;
+  const _MiniChip(
+      {required this.label, required this.color, required this.isDark});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: color.withOpacity(0.35)),
+        ),
+        child: Text(label,
+            style: TextStyle(
+                fontSize: 10.5,
+                color: color,
+                fontWeight: FontWeight.w600)),
+      );
+}
+
 // ══════════════════════════════════════════════════════════
 // ─── ADD / EDIT SHEET ────────────────────────────────────
 // ══════════════════════════════════════════════════════════
@@ -382,24 +421,26 @@ class _AlertEditSheet extends StatefulWidget {
 }
 
 class _AlertEditSheetState extends State<_AlertEditSheet> {
-  final _formKey   = GlobalKey<FormState>();
+  final _formKey  = GlobalKey<FormState>();
   late final TextEditingController _labelCtrl;
   late final TextEditingController _symbolCtrl;
-  late String _selectedPattern;
-  late String _selectedTimeframe;
-  late String _selectedBotId;
+
+  late Set<String> _selectedPatterns;
+  late Set<String> _selectedTimeframes;
+  late String      _selectedBotId;
+
   bool _validating  = false;
   bool _symbolValid = false;
 
   @override
   void initState() {
     super.initState();
-    final e         = widget.existing;
-    _labelCtrl      = TextEditingController(text: e?.label ?? '');
-    _symbolCtrl     = TextEditingController(text: e?.symbol ?? '');
-    _selectedPattern   = e?.pattern   ?? 'BE';
-    _selectedTimeframe = e?.timeframe ?? '1h';
-    _selectedBotId     = e?.botId     ?? _defaultBotId();
+    final e = widget.existing;
+    _labelCtrl         = TextEditingController(text: e?.label ?? '');
+    _symbolCtrl        = TextEditingController(text: e?.symbol ?? '');
+    _selectedPatterns  = Set.from(e?.patterns   ?? ['BE']);
+    _selectedTimeframes = Set.from(e?.timeframes ?? ['1h']);
+    _selectedBotId     = e?.botId ?? _defaultBotId();
     _symbolValid       = e != null;
   }
 
@@ -429,14 +470,16 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
   CandlePatternAlert _build() {
     final e = widget.existing;
     return CandlePatternAlert(
-      id:        e?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
-      symbol:    _symbolCtrl.text.trim().toUpperCase(),
-      pattern:   _selectedPattern,
-      timeframe: _selectedTimeframe,
-      botId:     _selectedBotId,
-      label:     _labelCtrl.text.trim(),
-      isActive:  e?.isActive ?? true,
-      createdAt: e?.createdAt,
+      id:         e?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
+      symbol:     _symbolCtrl.text.trim().toUpperCase(),
+      patterns:   _selectedPatterns.toList(),
+      timeframes: kAllTimeframes
+          .where(_selectedTimeframes.contains)
+          .toList(), // keep canonical order
+      botId:      _selectedBotId,
+      label:      _labelCtrl.text.trim(),
+      isActive:   e?.isActive ?? true,
+      createdAt:  e?.createdAt,
     );
   }
 
@@ -446,12 +489,19 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
       _snack('Validate the symbol first', isError: true);
       return;
     }
+    if (_selectedPatterns.isEmpty) {
+      _snack('Select at least one pattern', isError: true);
+      return;
+    }
+    if (_selectedTimeframes.isEmpty) {
+      _snack('Select at least one timeframe', isError: true);
+      return;
+    }
     if (Config.bots.isEmpty) {
       _snack('No Telegram bots configured yet.\nAdd a bot first.',
           isError: true);
       return;
     }
-    // Ensure selected bot still exists
     if (!Config.bots.any((b) => b.id == _selectedBotId)) {
       _selectedBotId = Config.bots.first.id;
     }
@@ -469,6 +519,33 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
     ));
   }
 
+  // ── Toggle helpers ─────────────────────────────────────
+  void _togglePattern(String p) {
+    setState(() {
+      if (_selectedPatterns.contains(p)) {
+        _selectedPatterns.remove(p);
+      } else {
+        _selectedPatterns.add(p);
+      }
+    });
+  }
+
+  void _toggleTimeframe(String tf) {
+    setState(() {
+      if (_selectedTimeframes.contains(tf)) {
+        _selectedTimeframes.remove(tf);
+      } else {
+        _selectedTimeframes.add(tf);
+      }
+    });
+  }
+
+  void _selectAllTimeframes() =>
+      setState(() => _selectedTimeframes = Set.from(kAllTimeframes));
+
+  void _clearAllTimeframes() =>
+      setState(() => _selectedTimeframes.clear());
+
   @override
   Widget build(BuildContext context) {
     final isDark     = Theme.of(context).brightness == Brightness.dark;
@@ -481,7 +558,7 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
     }
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.92,
+      initialChildSize: 0.94,
       minChildSize:     0.5,
       maxChildSize:     0.97,
       builder: (_, controller) => Container(
@@ -509,9 +586,7 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
                     color: Colors.blueAccent, size: 22),
                 const SizedBox(width: 10),
                 Text(
-                  isEdit
-                      ? 'Edit Pattern Alert'
-                      : 'New Pattern Alert',
+                  isEdit ? 'Edit Pattern Alert' : 'New Pattern Alert',
                   style: const TextStyle(
                       fontSize: 17, fontWeight: FontWeight.bold),
                 ),
@@ -537,7 +612,7 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
                       const _Label('Label (optional)'),
                       _Field(
                         controller: _labelCtrl,
-                        hint:  'e.g. BTC 4h bullish reversal',
+                        hint: 'e.g. BTC multi-TF reversals',
                         isDark: isDark,
                       ),
                       const SizedBox(height: 16),
@@ -598,52 +673,96 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 20),
 
-                      // ── Pattern picker ─────────────────
-                      const _Label('Pattern'),
+                      // ── Pattern multi-select ──────────
+                      Row(children: [
+                        const _Label('Patterns'),
+                        const SizedBox(width: 6),
+                        Text(
+                          '(${_selectedPatterns.length} selected)',
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: _selectedPatterns.isEmpty
+                                  ? Colors.redAccent
+                                  : Colors.grey.shade500),
+                        ),
+                      ]),
                       const SizedBox(height: 8),
                       Row(children: [
                         Expanded(
-                          child: _PatternButton(
+                          child: _PatternToggle(
                             pattern:  CandlePattern.BE,
-                            selected: _selectedPattern == 'BE',
+                            selected: _selectedPatterns.contains('BE'),
                             isDark:   isDark,
-                            onTap: () =>
-                                setState(() => _selectedPattern = 'BE'),
+                            onTap:    () => _togglePattern('BE'),
                           ),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: _PatternButton(
+                          child: _PatternToggle(
                             pattern:  CandlePattern.MS,
-                            selected: _selectedPattern == 'MS',
+                            selected: _selectedPatterns.contains('MS'),
                             isDark:   isDark,
-                            onTap: () =>
-                                setState(() => _selectedPattern = 'MS'),
+                            onTap:    () => _togglePattern('MS'),
                           ),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: _PatternButton(
+                          child: _PatternToggle(
                             pattern:  CandlePattern.ES,
-                            selected: _selectedPattern == 'ES',
+                            selected: _selectedPatterns.contains('ES'),
                             isDark:   isDark,
-                            onTap: () =>
-                                setState(() => _selectedPattern = 'ES'),
+                            onTap:    () => _togglePattern('ES'),
                           ),
                         ),
                       ]),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 20),
 
-                      // ── Timeframe picker ───────────────
-                      const _Label('Timeframe'),
+                      // ── Timeframe multi-select ─────────
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(children: [
+                            const _Label('Timeframes'),
+                            const SizedBox(width: 6),
+                            Text(
+                              '(${_selectedTimeframes.length} selected)',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: _selectedTimeframes.isEmpty
+                                      ? Colors.redAccent
+                                      : Colors.grey.shade500),
+                            ),
+                          ]),
+                          Row(children: [
+                            // Select All
+                            GestureDetector(
+                              onTap: _selectAllTimeframes,
+                              child: Text('All',
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.blueAccent,
+                                      fontWeight: FontWeight.w600)),
+                            ),
+                            const SizedBox(width: 12),
+                            // Clear All
+                            GestureDetector(
+                              onTap: _clearAllTimeframes,
+                              child: Text('None',
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey.shade500,
+                                      fontWeight: FontWeight.w600)),
+                            ),
+                          ]),
+                        ],
+                      ),
                       const SizedBox(height: 8),
-                      _TimeframePicker(
-                        selected:  _selectedTimeframe,
+                      _TimeframeMultiPicker(
+                        selected:  _selectedTimeframes,
                         isDark:    isDark,
-                        onChanged: (tf) =>
-                            setState(() => _selectedTimeframe = tf),
+                        onToggle:  _toggleTimeframe,
                       ),
                       const SizedBox(height: 20),
 
@@ -651,7 +770,7 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
                       const _Label('Send Alert Via'),
                       const SizedBox(height: 8),
                       if (bots.isEmpty)
-                        _NoBotWarning()
+                        const _NoBotWarning()
                       else
                         ...bots.map((bot) => _BotOption(
                               bot:      bot,
@@ -695,65 +814,82 @@ class _AlertEditSheetState extends State<_AlertEditSheet> {
   }
 }
 
-// ─── Pattern toggle button ────────────────────────────────
-class _PatternButton extends StatelessWidget {
+// ─── Pattern toggle tile (checkmark style) ───────────────
+class _PatternToggle extends StatelessWidget {
   final CandlePattern pattern;
   final bool          selected;
   final bool          isDark;
   final VoidCallback  onTap;
 
-  const _PatternButton({
+  const _PatternToggle({
     required this.pattern,
     required this.selected,
     required this.isDark,
     required this.onTap,
   });
 
-  Color get _accentColor {
-    if (pattern == CandlePattern.ES) return Colors.redAccent;
-    return Colors.green.shade400;
-  }
+  Color get _accent =>
+      pattern.isBullish ? Colors.green.shade400 : Colors.redAccent.shade200;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
+        duration: const Duration(milliseconds: 150),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
         decoration: BoxDecoration(
           color: selected
-              ? _accentColor.withOpacity(0.12)
+              ? _accent.withOpacity(0.12)
               : (isDark ? const Color(0xFF1A1A2E) : Colors.grey.shade50),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: selected
-                ? _accentColor.withOpacity(0.6)
+                ? _accent.withOpacity(0.6)
                 : (isDark ? Colors.grey.shade700 : Colors.grey.shade300),
-            width: selected ? 1.5 : 1,
+            width: selected ? 1.8 : 1,
           ),
         ),
         child: Column(
           children: [
-            Text(pattern.emoji,
-                style: const TextStyle(fontSize: 20)),
+            // Checkmark badge overlaid on emoji
+            Stack(
+              alignment: Alignment.topRight,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 4, top: 4),
+                  child: Text(pattern.emoji,
+                      style: const TextStyle(fontSize: 22)),
+                ),
+                if (selected)
+                  Container(
+                    width: 16, height: 16,
+                    decoration: BoxDecoration(
+                      color: _accent,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.check_rounded,
+                        size: 11, color: Colors.white),
+                  ),
+              ],
+            ),
             const SizedBox(height: 4),
             Text(
               pattern.shortLabel,
               style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-                color: selected ? _accentColor : null,
-              ),
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: selected ? _accent : null),
             ),
             const SizedBox(height: 2),
             Text(
               pattern.label,
               textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: 9.5,
-                color: isDark ? Colors.grey.shade400 : Colors.grey.shade500,
-              ),
+                  fontSize: 9,
+                  color: isDark
+                      ? Colors.grey.shade400
+                      : Colors.grey.shade500),
             ),
           ],
         ),
@@ -762,16 +898,16 @@ class _PatternButton extends StatelessWidget {
   }
 }
 
-// ─── Timeframe grid picker ────────────────────────────────
-class _TimeframePicker extends StatelessWidget {
-  final String           selected;
-  final bool             isDark;
-  final ValueChanged<String> onChanged;
+// ─── Timeframe multi-select grid ──────────────────────────
+class _TimeframeMultiPicker extends StatelessWidget {
+  final Set<String>          selected;
+  final bool                 isDark;
+  final ValueChanged<String> onToggle;
 
-  const _TimeframePicker({
+  const _TimeframeMultiPicker({
     required this.selected,
     required this.isDark,
-    required this.onChanged,
+    required this.onToggle,
   });
 
   @override
@@ -780,13 +916,12 @@ class _TimeframePicker extends StatelessWidget {
       spacing: 8,
       runSpacing: 8,
       children: kAllTimeframes.map((tf) {
-        final isSelected = tf == selected;
+        final isSelected = selected.contains(tf);
         return GestureDetector(
-          onTap: () => onChanged(tf),
+          onTap: () => onToggle(tf),
           child: AnimatedContainer(
-            duration: const Duration(milliseconds: 140),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            duration: const Duration(milliseconds: 130),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
               color: isSelected
                   ? Colors.blueAccent.withOpacity(0.15)
@@ -796,21 +931,32 @@ class _TimeframePicker extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
                 color: isSelected
-                    ? Colors.blueAccent.withOpacity(0.6)
+                    ? Colors.blueAccent.withOpacity(0.7)
                     : (isDark
                         ? Colors.grey.shade700
                         : Colors.grey.shade300),
-                width: isSelected ? 1.5 : 1,
+                width: isSelected ? 1.8 : 1,
               ),
             ),
-            child: Text(
-              tf,
-              style: TextStyle(
-                fontSize: 12.5,
-                fontWeight:
-                    isSelected ? FontWeight.bold : FontWeight.normal,
-                color: isSelected ? Colors.blueAccent : null,
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (isSelected) ...[
+                  Icon(Icons.check_rounded,
+                      size: 12, color: Colors.blueAccent),
+                  const SizedBox(width: 3),
+                ],
+                Text(
+                  tf,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: isSelected
+                        ? FontWeight.bold
+                        : FontWeight.normal,
+                    color: isSelected ? Colors.blueAccent : null,
+                  ),
+                ),
+              ],
             ),
           ),
         );
@@ -824,31 +970,29 @@ class _NoBotWarning extends StatelessWidget {
   const _NoBotWarning();
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.orange.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.orange.withOpacity(0.4)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.warning_amber_rounded,
-              color: Colors.orange.shade600, size: 18),
-          const SizedBox(width: 10),
-          const Expanded(
-            child: Text(
-              'No Telegram bots configured yet.\n'
-              'Add a bot from the main screen first.',
-              style: TextStyle(fontSize: 12.5, color: Colors.orange),
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.orange.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.orange.withOpacity(0.4)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.warning_amber_rounded,
+                color: Colors.orange.shade600, size: 18),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                'No Telegram bots configured yet.\n'
+                'Add a bot from the main screen first.',
+                style: TextStyle(fontSize: 12.5, color: Colors.orange),
+              ),
             ),
-          ),
-        ],
-      ),
-    );
-  }
+          ],
+        ),
+      );
 }
 
 // ─── Bot selection tile ───────────────────────────────────
@@ -866,75 +1010,71 @@ class _BotOption extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        margin: const EdgeInsets.only(bottom: 8),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: selected
-              ? Colors.blueAccent.withOpacity(0.08)
-              : (isDark ? const Color(0xFF1A1A2E) : Colors.grey.shade50),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          margin: const EdgeInsets.only(bottom: 8),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
             color: selected
-                ? Colors.blueAccent.withOpacity(0.5)
-                : (isDark ? Colors.grey.shade700 : Colors.grey.shade300),
-            width: selected ? 1.5 : 1,
+                ? Colors.blueAccent.withOpacity(0.08)
+                : (isDark ? const Color(0xFF1A1A2E) : Colors.grey.shade50),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: selected
+                  ? Colors.blueAccent.withOpacity(0.5)
+                  : (isDark ? Colors.grey.shade700 : Colors.grey.shade300),
+              width: selected ? 1.5 : 1,
+            ),
           ),
-        ),
-        child: Row(children: [
-          // Radio dot
-          Container(
-            width: 18, height: 18,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: selected ? Colors.blueAccent : Colors.grey.shade400,
-                width: 2,
+          child: Row(children: [
+            Container(
+              width: 18, height: 18,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: selected
+                      ? Colors.blueAccent
+                      : Colors.grey.shade400,
+                  width: 2,
+                ),
+              ),
+              alignment: Alignment.center,
+              child: selected
+                  ? Container(
+                      width: 8, height: 8,
+                      decoration: const BoxDecoration(
+                          color: Colors.blueAccent,
+                          shape: BoxShape.circle))
+                  : null,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(bot.name,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w600, fontSize: 13.5)),
+                  if (!bot.isConfigured)
+                    Text('Not configured',
+                        style: TextStyle(
+                            fontSize: 11, color: Colors.orange.shade400))
+                  else
+                    Text('Chat: ${bot.chatId}',
+                        style: TextStyle(
+                            fontSize: 11, color: Colors.grey.shade500)),
+                ],
               ),
             ),
-            alignment: Alignment.center,
-            child: selected
-                ? Container(
-                    width: 8, height: 8,
-                    decoration: const BoxDecoration(
-                      color: Colors.blueAccent,
-                      shape: BoxShape.circle,
-                    ),
-                  )
-                : null,
-          ),
-          const SizedBox(width: 12),
-          // Bot info
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(bot.name,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w600, fontSize: 13.5)),
-                if (!bot.isConfigured)
-                  Text('Not configured',
-                      style: TextStyle(
-                          fontSize: 11, color: Colors.orange.shade400))
-                else
-                  Text('Chat: ${bot.chatId}',
-                      style: TextStyle(
-                          fontSize: 11, color: Colors.grey.shade500)),
-              ],
-            ),
-          ),
-          if (!bot.isConfigured)
-            Icon(Icons.warning_amber_rounded,
-                size: 16, color: Colors.orange.shade400),
-        ]),
-      ),
-    );
-  }
+            if (!bot.isConfigured)
+              Icon(Icons.warning_amber_rounded,
+                  size: 16, color: Colors.orange.shade400),
+          ]),
+        ),
+      );
 }
 
 // ─── Shared form widgets ──────────────────────────────────
@@ -944,7 +1084,7 @@ class _Label extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.only(bottom: 0),
         child: Text(text,
             style: const TextStyle(
                 fontSize: 13,
@@ -954,13 +1094,13 @@ class _Label extends StatelessWidget {
 }
 
 class _Field extends StatelessWidget {
-  final TextEditingController        controller;
-  final String                       hint;
-  final bool                         isDark;
-  final Widget?                      suffix;
-  final TextCapitalization           capitalization;
-  final String? Function(String?)?   validator;
-  final ValueChanged<String>?        onChanged;
+  final TextEditingController      controller;
+  final String                     hint;
+  final bool                       isDark;
+  final Widget?                    suffix;
+  final TextCapitalization         capitalization;
+  final String? Function(String?)? validator;
+  final ValueChanged<String>?      onChanged;
 
   const _Field({
     required this.controller,
@@ -973,42 +1113,40 @@ class _Field extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    return TextFormField(
-      controller:         controller,
-      textCapitalization: capitalization,
-      onChanged:          onChanged,
-      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-      decoration: InputDecoration(
-        hintText:   hint,
-        hintStyle:  TextStyle(color: Colors.grey.shade500, fontSize: 13),
-        suffixIcon: suffix,
-        filled:     true,
-        fillColor:  isDark ? const Color(0xFF12121E) : Colors.grey.shade50,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-        border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide(color: Colors.grey.shade300)),
-        enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide(
-                color: isDark
-                    ? Colors.grey.shade700
-                    : Colors.grey.shade300)),
-        focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide:
-                const BorderSide(color: Colors.blueAccent, width: 1.8)),
-        errorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: Colors.redAccent)),
-        focusedErrorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide:
-                const BorderSide(color: Colors.redAccent, width: 1.8)),
-      ),
-      validator: validator,
-    );
-  }
+  Widget build(BuildContext context) => TextFormField(
+        controller:         controller,
+        textCapitalization: capitalization,
+        onChanged:          onChanged,
+        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+        decoration: InputDecoration(
+          hintText:   hint,
+          hintStyle:  TextStyle(color: Colors.grey.shade500, fontSize: 13),
+          suffixIcon: suffix,
+          filled:     true,
+          fillColor:  isDark ? const Color(0xFF12121E) : Colors.grey.shade50,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: Colors.grey.shade300)),
+          enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(
+                  color: isDark
+                      ? Colors.grey.shade700
+                      : Colors.grey.shade300)),
+          focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(
+                  color: Colors.blueAccent, width: 1.8)),
+          errorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: Colors.redAccent)),
+          focusedErrorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(
+                  color: Colors.redAccent, width: 1.8)),
+        ),
+        validator: validator,
+      );
 }
