@@ -1,7 +1,8 @@
 // ─── screens/main_shell.dart ─────────────────────────────
 // Root widget with:
 //   • 4-tab BottomNavigationBar (Home, Pairs, Indicator, Bot)
-//   • Left hamburger drawer → Price Alerts + Candle Pattern Alerts
+//   • Left hamburger drawer → Price Chart, Price Alerts,
+//                             Candle Pattern Alerts
 //   • Right AppBar icon → Telegram Bots sheet
 
 import 'package:flutter/material.dart';
@@ -10,6 +11,7 @@ import 'home_screen.dart';
 import 'settings_screen.dart';
 import 'price_alerts_screen.dart';
 import 'candle_pattern_alerts_screen.dart';
+import 'chart_screen.dart';
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
@@ -61,8 +63,16 @@ class _MainShellState extends State<MainShell> {
     );
   }
 
+  void _openChart() {
+    Navigator.pop(context); // close drawer
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ChartScreen()),
+    );
+  }
+
   void _openPriceAlerts() {
-    Navigator.pop(context); // close drawer first
+    Navigator.pop(context);
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const PriceAlertsScreen()),
@@ -70,7 +80,7 @@ class _MainShellState extends State<MainShell> {
   }
 
   void _openCandlePatternAlerts() {
-    Navigator.pop(context); // close drawer first
+    Navigator.pop(context);
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const CandlePatternAlertsScreen()),
@@ -91,6 +101,7 @@ class _MainShellState extends State<MainShell> {
     return Scaffold(
       // ── Drawer (hamburger) ──────────────────────────────
       drawer: _AppDrawer(
+        onChart:               _openChart,
         onPriceAlerts:         _openPriceAlerts,
         onCandlePatternAlerts: _openCandlePatternAlerts,
       ),
@@ -99,7 +110,6 @@ class _MainShellState extends State<MainShell> {
       appBar: AppBar(
         title: Text(_titles[_index]),
         centerTitle: false,
-        // leading is auto-set to the hamburger icon when drawer is present
         actions: [
           IconButton(
             tooltip: 'Telegram Bots',
@@ -142,27 +152,28 @@ class _TabItem {
 }
 
 // ══════════════════════════════════════════════════════════
-// ─── DRAWER ──────────────────────────────────════════════
+// ─── DRAWER ──────────────────────────════════════════════
 // ══════════════════════════════════════════════════════════
 class _AppDrawer extends StatelessWidget {
+  final VoidCallback onChart;
   final VoidCallback onPriceAlerts;
   final VoidCallback onCandlePatternAlerts;
 
   const _AppDrawer({
+    required this.onChart,
     required this.onPriceAlerts,
     required this.onCandlePatternAlerts,
   });
 
   @override
   Widget build(BuildContext context) {
-    final isDark       = Theme.of(context).brightness == Brightness.dark;
-    final headerBg     = isDark ? const Color(0xFF1E1E2E) : Colors.blueAccent;
-    final drawerBg     = isDark ? const Color(0xFF15152A) : Colors.white;
-    final activeAlerts = Config.priceAlerts.where((a) => a.shouldFire).length;
-    final triggered    = Config.priceAlerts.where((a) => a.isTriggered).length;
-    final activeCpAlerts = Config.candlePatternAlerts
-        .where((a) => a.isActive)
-        .length;
+    final isDark         = Theme.of(context).brightness == Brightness.dark;
+    final headerBg       = isDark ? const Color(0xFF1E1E2E) : Colors.blueAccent;
+    final drawerBg       = isDark ? const Color(0xFF15152A) : Colors.white;
+    final divColor       = isDark ? Colors.grey.shade800 : Colors.grey.shade200;
+    final activeAlerts   = Config.priceAlerts.where((a) => a.shouldFire).length;
+    final triggered      = Config.priceAlerts.where((a) => a.isTriggered).length;
+    final activeCpAlerts = Config.candlePatternAlerts.where((a) => a.isActive).length;
 
     return Drawer(
       backgroundColor: drawerBg,
@@ -183,8 +194,7 @@ class _AppDrawer extends StatelessWidget {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   alignment: Alignment.center,
-                  child: const Text('📈',
-                      style: TextStyle(fontSize: 24)),
+                  child: const Text('📈', style: TextStyle(fontSize: 24)),
                 ),
                 const SizedBox(height: 12),
                 const Text('HH/LL Alert Bot',
@@ -193,12 +203,10 @@ class _AppDrawer extends StatelessWidget {
                         fontSize: 18,
                         fontWeight: FontWeight.bold)),
                 const SizedBox(height: 2),
-                Text(
-                  'Crypto trading alerts',
-                  style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
-                      fontSize: 12.5),
-                ),
+                Text('Crypto trading alerts',
+                    style: TextStyle(
+                        color: Colors.white.withOpacity(0.7),
+                        fontSize: 12.5)),
               ],
             ),
           ),
@@ -209,13 +217,24 @@ class _AppDrawer extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 8),
               children: [
 
+                // ── Price Chart ───────────────────────────
+                _DrawerItem(
+                  icon:       Icons.candlestick_chart_rounded,
+                  label:      'Price Chart',
+                  sub:        '2-month interactive chart',
+                  badge:      null,
+                  badgeColor: null,
+                  subColor:   null,
+                  onTap:      onChart,
+                ),
+
+                Divider(height: 1, indent: 16, endIndent: 16, color: divColor),
+
                 // ── Price Alerts ──────────────────────────
                 _DrawerItem(
                   icon:       Icons.notifications_rounded,
                   label:      'Price Alerts',
-                  badge:      activeAlerts > 0
-                      ? '$activeAlerts active'
-                      : null,
+                  badge:      activeAlerts > 0 ? '$activeAlerts active' : null,
                   badgeColor: Colors.blueAccent,
                   sub:        triggered > 0
                       ? '$triggered triggered'
@@ -224,35 +243,23 @@ class _AppDrawer extends StatelessWidget {
                   onTap:      onPriceAlerts,
                 ),
 
-                Divider(
-                  height: 1,
-                  indent: 16, endIndent: 16,
-                  color: isDark
-                      ? Colors.grey.shade800
-                      : Colors.grey.shade200,
-                ),
+                Divider(height: 1, indent: 16, endIndent: 16, color: divColor),
 
                 // ── Candle Pattern Alerts ─────────────────
                 _DrawerItem(
-                  icon:       Icons.candlestick_chart_rounded,
+                  icon:       Icons.bar_chart_rounded,
                   label:      'Candle Patterns',
                   badge:      activeCpAlerts > 0
                       ? '$activeCpAlerts active'
                       : null,
                   badgeColor: Colors.teal,
                   sub:        'BE · MS · ES detection',
+                  subColor:   null,
                   onTap:      onCandlePatternAlerts,
                 ),
 
-                Divider(
-                  height: 1,
-                  indent: 16, endIndent: 16,
-                  color: isDark
-                      ? Colors.grey.shade800
-                      : Colors.grey.shade200,
-                ),
+                Divider(height: 1, indent: 16, endIndent: 16, color: divColor),
 
-                // Info section
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                   child: Text('More features coming soon',
@@ -269,11 +276,9 @@ class _AppDrawer extends StatelessWidget {
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: Text(
-                'HH/LL Alert Bot  •  v1.0',
-                style: TextStyle(
-                    fontSize: 11, color: Colors.grey.shade500),
-              ),
+              child: Text('HH/LL Alert Bot  •  v1.0',
+                  style: TextStyle(
+                      fontSize: 11, color: Colors.grey.shade500)),
             ),
           ),
         ],
@@ -284,12 +289,12 @@ class _AppDrawer extends StatelessWidget {
 
 // ─── Single drawer item ───────────────────────────────────
 class _DrawerItem extends StatelessWidget {
-  final IconData  icon;
-  final String    label;
-  final String?   badge;
-  final Color?    badgeColor;
-  final String?   sub;
-  final Color?    subColor;
+  final IconData   icon;
+  final String     label;
+  final String?    badge;
+  final Color?     badgeColor;
+  final String?    sub;
+  final Color?     subColor;
   final VoidCallback onTap;
 
   const _DrawerItem({
@@ -324,8 +329,8 @@ class _DrawerItem extends StatelessWidget {
           if (badge != null) ...[
             const SizedBox(width: 8),
             Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 7, vertical: 2),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
               decoration: BoxDecoration(
                 color: (badgeColor ?? Colors.blueAccent).withOpacity(0.15),
                 borderRadius: BorderRadius.circular(20),
@@ -380,7 +385,9 @@ class _TelegramBotsSheet extends StatelessWidget {
             Container(
               width: 40, height: 4,
               decoration: BoxDecoration(
-                color: isDark ? Colors.grey.shade700 : Colors.grey.shade300,
+                color: isDark
+                    ? Colors.grey.shade700
+                    : Colors.grey.shade300,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),

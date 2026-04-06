@@ -30,8 +30,8 @@ class SymbolValidationResult {
 }
 
 class BinanceService {
-  static const String _baseUrl      = 'https://api.binance.com/api/v3/klines';
-  static const String _tickerUrl    = 'https://api.binance.com/api/v3/ticker/price';
+  static const String _baseUrl   = 'https://api.binance.com/api/v3/klines';
+  static const String _tickerUrl = 'https://api.binance.com/api/v3/ticker/price';
 
   // ─── Validate a symbol against Binance ───────────────
   static Future<SymbolValidationResult> validateSymbol(String symbol) async {
@@ -54,7 +54,6 @@ class BinanceService {
   }
 
   // ─── Get the current price of a symbol ───────────────
-  /// Returns null if the request fails or the symbol is invalid.
   static Future<double?> getCurrentPrice(String symbol) async {
     try {
       final uri      = Uri.parse('$_tickerUrl?symbol=${symbol.toUpperCase()}');
@@ -71,7 +70,7 @@ class BinanceService {
     }
   }
 
-  // ─── Fetch OHLCV candles ──────────────────────────────
+  // ─── Fetch OHLCV candles (bot use — uses Config.limit) ─
   static Future<List<Candle>> fetchCandles(
       String symbol, String timeframe) async {
     final uri = Uri.parse(
@@ -88,7 +87,55 @@ class BinanceService {
     }
 
     final List<dynamic> raw = jsonDecode(response.body);
+    return _parseCandles(raw);
+  }
 
+  // ─── Fetch ~2 months of candles for the price chart ──
+  // Uses Binance startTime param and pages up to 3 requests
+  // (max 3 000 candles) to cover 62 days on any timeframe.
+  static Future<List<Candle>> fetchCandlesForChart(
+      String symbol, String timeframe) async {
+    final startMs = DateTime.now()
+        .subtract(const Duration(days: 62))
+        .millisecondsSinceEpoch;
+
+    final List<Candle> result = [];
+    int from = startMs;
+
+    for (int attempt = 0; attempt < 3; attempt++) {
+      final uri = Uri.parse(
+        '$_baseUrl?symbol=${symbol.toUpperCase()}'
+        '&interval=$timeframe&startTime=$from&limit=1000',
+      );
+
+      final response =
+          await http.get(uri).timeout(const Duration(seconds: 20));
+
+      if (response.statusCode != 200) {
+        final body = jsonDecode(response.body);
+        final msg  = body['msg'] as String? ?? '${response.statusCode}';
+        throw Exception('Binance: $msg');
+      }
+
+      final raw = jsonDecode(response.body) as List;
+      if (raw.isEmpty) break;
+
+      final batch = _parseCandles(raw);
+      result.addAll(batch);
+
+      // Fewer than 1 000 means no more pages
+      if (raw.length < 1000) break;
+
+      // Advance start time past the last received candle
+      from = batch.last.time.millisecondsSinceEpoch + 1;
+      if (from > DateTime.now().millisecondsSinceEpoch) break;
+    }
+
+    return result;
+  }
+
+  // ─── Parse raw Binance kline array ───────────────────
+  static List<Candle> _parseCandles(List<dynamic> raw) {
     return raw.map((item) {
       return Candle(
         time:   DateTime.fromMillisecondsSinceEpoch(item[0] as int),
