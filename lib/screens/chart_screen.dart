@@ -1,8 +1,12 @@
 // ─── screens/chart_screen.dart ──────────────────────────
-// Interactive candlestick chart — 2 months of Binance data.
-// Features: pinch-zoom, pan, crosshair, HH/LL pivot lines,
-// current price line, OHLCV info bar.
+// Interactive candlestick chart
+//   • Live price auto-refresh every 15 s
+//   • 9 months of historical data with automatic gap-fill
+//   • Multi-pair switcher with search
+//   • Pinch-zoom · pan · crosshair · live price line
+//   • OHLCV info bar · time axis · price axis
 
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -21,21 +25,34 @@ class ChartScreen extends StatefulWidget {
   State<ChartScreen> createState() => _ChartScreenState();
 }
 
-class _ChartScreenState extends State<ChartScreen> {
+class _ChartScreenState extends State<ChartScreen>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
   // ── Symbol / timeframe ────────────────────────────────
-  String _symbol    = Config.symbols.isNotEmpty ? Config.symbols.first : 'BTCUSDT';
+  late String _symbol;
   String _timeframe = '1h';
 
   // ── Data ──────────────────────────────────────────────
-  List<Candle> _candles  = [];
-  bool         _loading  = false;
+  List<Candle> _candles    = [];
+  bool         _loading    = false;
+  bool         _refreshing = false;
   String?      _error;
   PivotResult? _pivots;
-  bool         _showPivots = true;
+  DateTime?    _lastUpdated;
+
+  // ── Live-price timer ──────────────────────────────────
+  Timer?  _liveTimer;
+  double? _livePrice;
 
   // ── Chart viewport ────────────────────────────────────
-  double _candleWidth   = 8.0; // px per candle slot
-  double _scrollCandles = 0.0; // candles scrolled from right edge
+  // _rightPad: how many candle-widths of empty space to keep
+  // on the right so the latest candle is NOT flush to the axis.
+  static const double _rightPadCandles = 3.0;
+
+  double _candleWidth   = 8.0;
+  double _scrollCandles = 0.0;
 
   // ── Gesture tracking ──────────────────────────────────
   double _gStartCW     = 8.0;
@@ -46,53 +63,124 @@ class _ChartScreenState extends State<ChartScreen> {
   Offset? _crosshair;
   int?    _selectedIdx;
 
-  final TextEditingController _symCtrl = TextEditingController();
+  final TextEditingController _searchCtrl = TextEditingController();
 
   static const List<String> _timeframes = [
     '5m', '15m', '30m', '1h', '4h', '1d', '1w',
   ];
 
+  // ══════════════════════════════════════════════════════
+  // LIFECYCLE
+  // ══════════════════════════════════════════════════════
+
   @override
   void initState() {
     super.initState();
-    _symCtrl.text = _symbol;
-    _fetch();
+    _symbol = Config.symbols.isNotEmpty ? Config.symbols.first : 'BTCUSDT';
+    _fetchHistory();
+    _startLiveTimer();
   }
 
   @override
   void dispose() {
-    _symCtrl.dispose();
+    _liveTimer?.cancel();
+    _searchCtrl.dispose();
     super.dispose();
   }
 
-  // ── Fetch 2 months of candles ─────────────────────────
-  Future<void> _fetch() async {
+  // ══════════════════════════════════════════════════════
+  // DATA FETCHING
+  // ══════════════════════════════════════════════════════
+
+  /// Full history fetch — called on symbol / timeframe change.
+  /// BinanceService always does a gap-fill at the end, so the
+  /// array will be continuous right up to the current candle.
+  Future<void> _fetchHistory() async {
     setState(() {
       _loading     = true;
       _error       = null;
       _candles     = [];
       _selectedIdx = null;
       _crosshair   = null;
+      _livePrice   = null;
     });
     try {
       final candles = await BinanceService.fetchCandlesForChart(
-          _symbol, _timeframe);
-      PivotResult? piv;
-      if (candles.length >= Config.pivotLen * 2 + 1) {
-        piv = PivotService.getHHLL(candles);
-      }
+          _symbol, _timeframe, months: 9);
+      final piv = candles.length >= Config.pivotLen * 2 + 1
+          ? PivotService.getHHLL(candles)
+          : null;
+      if (!mounted) return;
       setState(() {
         _candles       = candles;
         _pivots        = piv;
         _loading       = false;
+        // Start view at the right edge (scrollCandles = 0)
         _scrollCandles = 0;
+        _lastUpdated   = DateTime.now();
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() { _error = e.toString(); _loading = false; });
     }
   }
 
-  // ── Gesture handlers ──────────────────────────────────
+  /// Silent live tick every 15 s.
+  /// Fetches all candles from the last known candle onward,
+  /// which fills any gap that might have opened since the
+  /// historical fetch completed.
+  Future<void> _liveRefresh() async {
+    if (_loading || _candles.isEmpty) return;
+    setState(() => _refreshing = true);
+    try {
+      // Fetch ticker price (fast)
+      final price = await BinanceService.getCurrentPrice(_symbol);
+
+      // Fetch all candles from the last one we have to now
+      // (this fills gaps AND updates the in-progress candle)
+      final recent = await BinanceService.fetchCandlesFrom(
+          _symbol, _timeframe, _candles.last.time);
+
+      if (!mounted) return;
+      setState(() {
+        _livePrice   = price;
+        _lastUpdated = DateTime.now();
+
+        for (final fresh in recent) {
+          final idx = _candles.indexWhere(
+              (c) => c.time.isAtSameMomentAs(fresh.time));
+          if (idx >= 0) {
+            // Update existing candle (the live in-progress one)
+            _candles[idx] = fresh;
+          } else if (fresh.time.isAfter(_candles.last.time)) {
+            // Append new candle (gap-fill or new bar opened)
+            _candles.add(fresh);
+          }
+        }
+
+        // Recompute pivots on the updated dataset
+        if (_candles.length >= Config.pivotLen * 2 + 1) {
+          _pivots = PivotService.getHHLL(_candles);
+        }
+        _refreshing = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _refreshing = false);
+    }
+  }
+
+  void _startLiveTimer() {
+    _liveTimer?.cancel();
+    _liveTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      _liveRefresh();
+    });
+  }
+
+  // ══════════════════════════════════════════════════════
+  // GESTURES
+  // ══════════════════════════════════════════════════════
+
   void _onScaleStart(ScaleStartDetails d) {
     _gStartCW     = _candleWidth;
     _gStartScroll = _scrollCandles;
@@ -101,18 +189,17 @@ class _ChartScreenState extends State<ChartScreen> {
 
   void _onScaleUpdate(ScaleUpdateDetails d) {
     setState(() {
-      // Pinch = zoom
       _candleWidth =
           (_gStartCW * d.scale).clamp(2.0, 40.0);
 
-      // Pan = scroll
-      final dx       = d.localFocalPoint.dx - _gStartFocal.dx;
-      final maxScroll =
-          (_candles.length - 5).toDouble().clamp(0.0, double.infinity);
+      // Max scroll: can't go further left than the first candle,
+      // but allow negative scroll (shows empty space on left).
+      final maxScroll = (_candles.length - 5).toDouble()
+          .clamp(0.0, double.infinity);
+      final dx = d.localFocalPoint.dx - _gStartFocal.dx;
       _scrollCandles =
           (_gStartScroll - dx / _candleWidth).clamp(0.0, maxScroll);
 
-      // Crosshair only on single-finger drag
       if (d.pointerCount == 1) {
         _crosshair = d.localFocalPoint;
       } else {
@@ -122,49 +209,44 @@ class _ChartScreenState extends State<ChartScreen> {
     });
   }
 
-  void _onScaleEnd(ScaleEndDetails d) {
-    setState(() {
-      _crosshair   = null;
-      _selectedIdx = null;
-    });
+  void _onScaleEnd(ScaleEndDetails _) {
+    setState(() { _crosshair = null; _selectedIdx = null; });
   }
 
-  // ── Symbol submit ─────────────────────────────────────
-  void _submitSymbol() {
-    final s = _symCtrl.text.trim().toUpperCase();
-    if (s.isNotEmpty && s != _symbol) {
-      setState(() => _symbol = s);
-      _fetch();
-    }
+  // ══════════════════════════════════════════════════════
+  // PAIR SELECTOR
+  // ══════════════════════════════════════════════════════
+
+  void _openPairSelector() {
+    _searchCtrl.clear();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _PairSheet(
+        current:    _symbol,
+        searchCtrl: _searchCtrl,
+        onSelect:   (sym) {
+          Navigator.pop(context);
+          if (sym != _symbol) {
+            setState(() => _symbol = sym);
+            _fetchHistory();
+          }
+        },
+      ),
+    );
   }
 
-  // ── Build ─────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════
+  // BUILD
+  // ══════════════════════════════════════════════════════
+
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A14),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF12121E),
-        foregroundColor: Colors.white,
-        elevation: 0,
-        titleSpacing: 0,
-        title: _buildTitle(),
-        actions: [
-          IconButton(
-            icon: Icon(
-              Icons.horizontal_rule_rounded,
-              color: _showPivots ? Colors.orange : Colors.grey.shade600,
-            ),
-            tooltip: 'Toggle HH/LL pivot lines',
-            onPressed: () => setState(() => _showPivots = !_showPivots),
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, size: 20),
-            onPressed: _loading ? null : _fetch,
-          ),
-          const SizedBox(width: 4),
-        ],
-      ),
+      appBar: _buildAppBar(),
       body: Column(
         children: [
           _buildTfBar(),
@@ -175,122 +257,165 @@ class _ChartScreenState extends State<ChartScreen> {
     );
   }
 
-  // ── AppBar title — symbol input + live price ──────────
-  Widget _buildTitle() {
-    return Padding(
-      padding: const EdgeInsets.only(left: 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _symCtrl,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-              textCapitalization: TextCapitalization.characters,
-              textInputAction: TextInputAction.search,
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
-                LengthLimitingTextInputFormatter(12),
+  // ── AppBar ────────────────────────────────────────────
+  PreferredSizeWidget _buildAppBar() {
+    final liveColor = _candles.isNotEmpty
+        ? (_candles.last.close >= _candles.last.open
+            ? const Color(0xFF26A69A)
+            : const Color(0xFFEF5350))
+        : Colors.grey;
+    final displayPrice =
+        _livePrice ?? (_candles.isNotEmpty ? _candles.last.close : null);
+
+    return AppBar(
+      backgroundColor: const Color(0xFF12121E),
+      foregroundColor: Colors.white,
+      elevation: 0,
+      titleSpacing: 0,
+      automaticallyImplyLeading: false,
+      // ── Pair selector ─────────────────────────────────
+      title: GestureDetector(
+        onTap: _openPairSelector,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_symbol,
+                  style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white)),
+              const SizedBox(width: 3),
+              const Icon(Icons.keyboard_arrow_down_rounded,
+                  size: 18, color: Color(0xFF888899)),
+              const SizedBox(width: 10),
+              if (displayPrice != null)
+                Text(_fmtP(displayPrice),
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: liveColor)),
+              if (_refreshing) ...[
+                const SizedBox(width: 6),
+                SizedBox(
+                  width: 8, height: 8,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 1.5,
+                      color: Colors.blueAccent.withOpacity(0.7)),
+                ),
               ],
-              onSubmitted: (_) => _submitSymbol(),
-              decoration: const InputDecoration(
-                hintText: 'Symbol...',
-                hintStyle: TextStyle(color: Color(0xFF555577), fontSize: 14),
-                border: InputBorder.none,
-                isDense: true,
-              ),
-            ),
+            ],
           ),
-          if (_candles.isNotEmpty) ...[
-            Text(
-              _fmtP(_candles.last.close),
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: _candles.last.close >= _candles.last.open
-                    ? const Color(0xFF26A69A)
-                    : const Color(0xFFEF5350),
-              ),
-            ),
-            const SizedBox(width: 6),
-          ],
-        ],
+        ),
       ),
+      actions: [
+        // Live indicator dot
+        Padding(
+          padding: const EdgeInsets.only(right: 4, top: 4),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 7, height: 7,
+                decoration: BoxDecoration(
+                  color: _refreshing
+                      ? Colors.orange
+                      : const Color(0xFF26A69A),
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(height: 1),
+              Text('LIVE',
+                  style: TextStyle(
+                      fontSize: 7,
+                      color: Colors.grey.shade600,
+                      letterSpacing: 0.5)),
+            ],
+          ),
+        ),
+        // ── Refresh button only — HH/LL toggle REMOVED ─
+        IconButton(
+          icon: const Icon(Icons.refresh_rounded, size: 20),
+          onPressed: _loading ? null : _fetchHistory,
+        ),
+        const SizedBox(width: 2),
+      ],
     );
   }
 
-  // ── Timeframe selector bar ────────────────────────────
+  // ── Timeframe bar ─────────────────────────────────────
   Widget _buildTfBar() {
     return Container(
       color: const Color(0xFF12121E),
       height: 34,
-      child: Row(
-        children: [
-          const SizedBox(width: 8),
-          ..._timeframes.map((tf) {
-            final sel = tf == _timeframe;
-            return GestureDetector(
-              onTap: () {
-                if (tf != _timeframe) {
-                  setState(() => _timeframe = tf);
-                  _fetch();
-                }
-              },
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 5),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
-                decoration: BoxDecoration(
-                  color: sel
-                      ? Colors.blueAccent.withOpacity(0.9)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(4),
-                  border: sel
-                      ? null
-                      : Border.all(color: const Color(0xFF2A2A40)),
-                ),
-                child: Text(
-                  tf,
+      child: Row(children: [
+        const SizedBox(width: 6),
+        ..._timeframes.map((tf) {
+          final sel = tf == _timeframe;
+          return GestureDetector(
+            onTap: () {
+              if (tf != _timeframe) {
+                setState(() => _timeframe = tf);
+                _fetchHistory();
+              }
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              margin:  const EdgeInsets.symmetric(horizontal: 2, vertical: 5),
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
+              decoration: BoxDecoration(
+                color: sel
+                    ? Colors.blueAccent.withOpacity(0.9)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(4),
+                border: sel
+                    ? null
+                    : Border.all(color: const Color(0xFF2A2A40)),
+              ),
+              child: Text(tf,
                   style: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: sel ? FontWeight.bold : FontWeight.normal,
-                    color: sel ? Colors.white : Colors.grey.shade500,
-                  ),
-                ),
-              ),
-            );
-          }),
-          const Spacer(),
-          if (_candles.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(right: 10),
-              child: Text(
-                '${_candles.length} bars · 2m',
-                style: const TextStyle(
-                    fontSize: 10, color: Color(0xFF444466)),
-              ),
+                      fontSize: 11.5,
+                      fontWeight:
+                          sel ? FontWeight.bold : FontWeight.normal,
+                      color: sel ? Colors.white : Colors.grey.shade500)),
             ),
-        ],
-      ),
+          );
+        }),
+        const Spacer(),
+        if (_lastUpdated != null)
+          Padding(
+            padding: const EdgeInsets.only(right: 10),
+            child: Text(
+              '${_p2(_lastUpdated!.hour)}:${_p2(_lastUpdated!.minute)}:${_p2(_lastUpdated!.second)}',
+              style: const TextStyle(
+                  fontSize: 9, color: Color(0xFF444466)),
+            ),
+          ),
+      ]),
     );
   }
 
-  // ── Main chart body ───────────────────────────────────
+  // ── Chart body ────────────────────────────────────────
   Widget _buildBody() {
     if (_loading) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircularProgressIndicator(
-                color: Colors.blueAccent, strokeWidth: 2),
-            SizedBox(height: 14),
-            Text('Fetching 2 months of data...',
-                style: TextStyle(color: Color(0xFF555577), fontSize: 13)),
+            const SizedBox(
+              width: 32, height: 32,
+              child: CircularProgressIndicator(
+                  color: Colors.blueAccent, strokeWidth: 2),
+            ),
+            const SizedBox(height: 14),
+            Text('Loading $_symbol...',
+                style: const TextStyle(
+                    color: Color(0xFF555577), fontSize: 13)),
+            const SizedBox(height: 4),
+            const Text('Fetching historical data',
+                style: TextStyle(
+                    color: Color(0xFF333355), fontSize: 11)),
           ],
         ),
       );
@@ -306,22 +431,19 @@ class _ChartScreenState extends State<ChartScreen> {
             const SizedBox(height: 12),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Text(
-                _error!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                    color: Color(0xFF888888), fontSize: 12),
-              ),
+              child: Text(_error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      color: Color(0xFF888888), fontSize: 12)),
             ),
             const SizedBox(height: 20),
             ElevatedButton.icon(
-              onPressed: _fetch,
+              onPressed: _fetchHistory,
               icon: const Icon(Icons.refresh_rounded, size: 16),
               label: const Text('Retry'),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blueAccent,
-                foregroundColor: Colors.white,
-              ),
+                  backgroundColor: Colors.blueAccent,
+                  foregroundColor: Colors.white),
             ),
           ],
         ),
@@ -330,116 +452,150 @@ class _ChartScreenState extends State<ChartScreen> {
 
     if (_candles.isEmpty) {
       return const Center(
-        child: Text('No data',
-            style: TextStyle(color: Color(0xFF555577), fontSize: 14)),
-      );
+          child: Text('No data',
+              style: TextStyle(color: Color(0xFF555577), fontSize: 14)));
     }
 
     return GestureDetector(
       onScaleStart:  _onScaleStart,
       onScaleUpdate: _onScaleUpdate,
       onScaleEnd:    _onScaleEnd,
-      child: LayoutBuilder(
-        builder: (ctx, constraints) {
-          final size = Size(constraints.maxWidth, constraints.maxHeight);
-          _selectedIdx = _crosshair != null
-              ? _resolveIdx(_crosshair!, size)
-              : null;
-          return CustomPaint(
-            painter: _ChartPainter(
-              candles:       _candles,
-              candleWidth:   _candleWidth,
-              scrollCandles: _scrollCandles,
-              pivots:        _showPivots ? _pivots : null,
-              selectedIdx:   _selectedIdx,
-              crosshair:     _crosshair,
-            ),
-            size: size,
-          );
-        },
-      ),
+      child: LayoutBuilder(builder: (ctx, constraints) {
+        final size = Size(constraints.maxWidth, constraints.maxHeight);
+        _selectedIdx =
+            _crosshair != null ? _resolveIdx(_crosshair!, size) : null;
+        return CustomPaint(
+          painter: _ChartPainter(
+            candles:          _candles,
+            candleWidth:      _candleWidth,
+            scrollCandles:    _scrollCandles,
+            rightPadCandles:  _rightPadCandles,
+            selectedIdx:      _selectedIdx,
+            crosshair:        _crosshair,
+            livePrice:        _livePrice,
+          ),
+          size: size,
+        );
+      }),
     );
   }
 
   // ── OHLCV info bar ────────────────────────────────────
   Widget _buildInfoBar() {
-    final Candle? c;
+    Candle? c;
     if (_selectedIdx != null &&
         _selectedIdx! >= 0 &&
         _selectedIdx! < _candles.length) {
       c = _candles[_selectedIdx!];
     } else if (_candles.isNotEmpty) {
       c = _candles.last;
-    } else {
-      c = null;
     }
 
     if (c == null) {
-      return Container(color: const Color(0xFF0D0D1A), height: 36);
+      return Container(color: const Color(0xFF0D0D1A), height: 38);
     }
 
-    final isBull  = c.close >= c.open;
-    final color   = isBull ? const Color(0xFF26A69A) : const Color(0xFFEF5350);
-    final chg     = (c.close - c.open) / c.open * 100;
-    final dateStr = '${c.time.year}-${_p2(c.time.month)}-${_p2(c.time.day)}'
-        ' ${_p2(c.time.hour)}:${_p2(c.time.minute)}';
+    final isBull = c.close >= c.open;
+    final col    = isBull ? const Color(0xFF26A69A) : const Color(0xFFEF5350);
+    final chg    = (c.close - c.open) / c.open * 100;
+    final date   =
+        '${c.time.year}-${_p2(c.time.month)}-${_p2(c.time.day)} '
+        '${_p2(c.time.hour)}:${_p2(c.time.minute)}';
 
     return Container(
       color: const Color(0xFF0D0D1A),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       child: Row(
         children: [
-          Text(dateStr,
-              style:
-                  const TextStyle(fontSize: 9, color: Color(0xFF555577))),
-          const SizedBox(width: 8),
-          _ohlcv('O', c.open,  Colors.grey.shade500),
-          _ohlcv('H', c.high,  const Color(0xFF26A69A)),
-          _ohlcv('L', c.low,   const Color(0xFFEF5350)),
-          _ohlcv('C', c.close, color),
+          Text(date,
+              style: const TextStyle(
+                  fontSize: 9, color: Color(0xFF555577))),
+          const SizedBox(width: 6),
+          _ov('O', c.open,   const Color(0xFF888899)),
+          _ov('H', c.high,   const Color(0xFF26A69A)),
+          _ov('L', c.low,    const Color(0xFFEF5350)),
+          _ov('C', c.close,  col),
+          _ovVol('V', c.volume),
           const Spacer(),
           Text(
             '${chg >= 0 ? '+' : ''}${chg.toStringAsFixed(2)}%',
             style: TextStyle(
-                fontSize: 11, fontWeight: FontWeight.bold, color: color),
+                fontSize: 11, fontWeight: FontWeight.bold, color: col),
           ),
+          const SizedBox(width: 4),
+          if (_selectedIdx == null)
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: const Color(0xFF26A69A).withOpacity(0.15),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                    color: const Color(0xFF26A69A).withOpacity(0.4)),
+              ),
+              child: const Text('LIVE',
+                  style: TextStyle(
+                      fontSize: 8,
+                      color: Color(0xFF26A69A),
+                      fontWeight: FontWeight.bold)),
+            ),
         ],
       ),
     );
   }
 
-  Widget _ohlcv(String label, double value, Color color) {
+  Widget _ov(String label, double value, Color color) {
     return Padding(
-      padding: const EdgeInsets.only(right: 10),
+      padding: const EdgeInsets.only(right: 8),
       child: RichText(
         text: TextSpan(children: [
-          TextSpan(
-              text: '$label ',
+          TextSpan(text: '$label ',
               style: const TextStyle(
                   fontSize: 9, color: Color(0xFF555577))),
-          TextSpan(
-              text: _fmtP(value),
+          TextSpan(text: _fmtP(value),
               style: TextStyle(
-                  fontSize: 10,
-                  color: color,
+                  fontSize: 9.5, color: color,
                   fontWeight: FontWeight.w600)),
         ]),
       ),
     );
   }
 
-  // ── Resolve candle index from crosshair x ─────────────
-  int? _resolveIdx(Offset pos, Size size) {
-    const priceAxisW = 65.0;
-    final chartW = size.width - priceAxisW;
-    if (pos.dx < 0 || pos.dx > chartW) return null;
-    final lastIdx =
-        (_candles.length - 1 - _scrollCandles).round().clamp(0, _candles.length - 1);
-    final fromRight = (chartW - pos.dx) / _candleWidth;
-    return (lastIdx - fromRight).round().clamp(0, _candles.length - 1);
+  Widget _ovVol(String label, double value) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: RichText(
+        text: TextSpan(children: [
+          TextSpan(text: '$label ',
+              style: const TextStyle(
+                  fontSize: 9, color: Color(0xFF555577))),
+          TextSpan(text: _fmtVol(value),
+              style: const TextStyle(
+                  fontSize: 9.5, color: Color(0xFF888899),
+                  fontWeight: FontWeight.w600)),
+        ]),
+      ),
+    );
   }
 
-  // ── Formatters ────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────
+
+  /// Convert screen x → candle index, accounting for right padding.
+  int? _resolveIdx(Offset pos, Size size) {
+    const pw = 66.0;
+    final cW = size.width - pw;
+    if (pos.dx < 0 || pos.dx > cW) return null;
+
+    // x of last candle (same formula as painter, with rightPad)
+    final rightPx = _rightPadCandles * _candleWidth;
+    final lastIdx =
+        (_candles.length - 1 - _scrollCandles).round()
+            .clamp(0, _candles.length - 1);
+    final fromRight = (cW - rightPx - pos.dx) / _candleWidth;
+    return (lastIdx - fromRight).round()
+        .clamp(0, _candles.length - 1);
+  }
+
   String _fmtP(double v) {
     if (v >= 10000) return v.toStringAsFixed(0);
     if (v >= 100)   return v.toStringAsFixed(2);
@@ -447,7 +603,249 @@ class _ChartScreenState extends State<ChartScreen> {
     return v.toStringAsFixed(6);
   }
 
+  String _fmtVol(double v) {
+    if (v >= 1e9) return '${(v / 1e9).toStringAsFixed(1)}B';
+    if (v >= 1e6) return '${(v / 1e6).toStringAsFixed(1)}M';
+    if (v >= 1e3) return '${(v / 1e3).toStringAsFixed(1)}K';
+    return v.toStringAsFixed(0);
+  }
+
   String _p2(int n) => n.toString().padLeft(2, '0');
+}
+
+// ══════════════════════════════════════════════════════════
+// PAIR SELECTOR SHEET
+// ══════════════════════════════════════════════════════════
+class _PairSheet extends StatefulWidget {
+  final String                current;
+  final TextEditingController searchCtrl;
+  final ValueChanged<String>  onSelect;
+  const _PairSheet({
+    required this.current,
+    required this.searchCtrl,
+    required this.onSelect,
+  });
+
+  @override
+  State<_PairSheet> createState() => _PairSheetState();
+}
+
+class _PairSheetState extends State<_PairSheet> {
+  String _query = '';
+
+  static const List<String> _popular = [
+    'BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT',
+    'DOGEUSDT','ADAUSDT','AVAXUSDT','DOTUSDT','LINKUSDT',
+    'MATICUSDT','LTCUSDT','UNIUSDT','ATOMUSDT','NEARUSDT',
+    'APTUSDT','ARBUSDT','OPUSDT','SUIUSDT','SEIUSDT',
+    'INJUSDT','TIAUSDT','WIFUSDT','BONKUSDT','PEPEUSDT',
+    'TRXUSDT','FTMUSDT','LDOUSDT','STXUSDT','RUNEUSDT',
+    'ETHBTC','BNBBTC',
+  ];
+
+  List<String> get _symbols {
+    final all = {...Config.symbols, ..._popular}.toList();
+    if (_query.isEmpty) return all;
+    final q = _query.toUpperCase();
+    return all.where((s) => s.contains(q)).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.72,
+      minChildSize: 0.4,
+      maxChildSize: 0.92,
+      builder: (_, ctrl) => Container(
+        decoration: const BoxDecoration(
+          color: Color(0xFF12121E),
+          borderRadius:
+              BorderRadius.vertical(top: Radius.circular(18)),
+        ),
+        child: Column(
+          children: [
+            const SizedBox(height: 10),
+            Container(
+              width: 36, height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade700,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 12),
+            // header
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(children: [
+                const Text('Select Pair',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold)),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.close,
+                      color: Colors.grey, size: 20),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ]),
+            ),
+            // search
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: TextField(
+                controller: widget.searchCtrl,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+                textCapitalization: TextCapitalization.characters,
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(
+                      RegExp(r'[A-Za-z0-9]')),
+                ],
+                decoration: InputDecoration(
+                  hintText: 'Search… e.g. ETH, SOL, BNB',
+                  hintStyle: const TextStyle(
+                      color: Color(0xFF555577), fontSize: 13),
+                  prefixIcon: const Icon(Icons.search_rounded,
+                      color: Color(0xFF555577), size: 20),
+                  suffixIcon: _query.isNotEmpty
+                      ? GestureDetector(
+                          onTap: () {
+                            widget.searchCtrl.clear();
+                            setState(() => _query = '');
+                          },
+                          child: const Icon(Icons.close,
+                              color: Color(0xFF555577), size: 18),
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: const Color(0xFF1A1A2E),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(
+                          color: Color(0xFF2A2A40))),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(
+                          color: Color(0xFF2A2A40))),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(
+                          color: Colors.blueAccent, width: 1.5)),
+                ),
+                onChanged: (v) => setState(() => _query = v),
+                onSubmitted: (v) {
+                  final sym = v.trim().toUpperCase();
+                  if (sym.isNotEmpty) widget.onSelect(sym);
+                },
+              ),
+            ),
+            // list
+            Expanded(
+              child: _symbols.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.search_off_rounded,
+                              color: Color(0xFF444466), size: 40),
+                          const SizedBox(height: 8),
+                          const Text('No matches',
+                              style: TextStyle(
+                                  color: Color(0xFF555577))),
+                          const SizedBox(height: 10),
+                          TextButton(
+                            onPressed: () {
+                              final sym =
+                                  _query.trim().toUpperCase();
+                              if (sym.isNotEmpty) {
+                                widget.onSelect(sym);
+                              }
+                            },
+                            child: Text('Open "$_query" anyway →',
+                                style: const TextStyle(
+                                    color: Colors.blueAccent)),
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.builder(
+                      controller: ctrl,
+                      itemCount: _symbols.length,
+                      itemBuilder: (_, i) {
+                        final sym   = _symbols[i];
+                        final isCur = sym == widget.current;
+                        final isWL  = Config.symbols.contains(sym);
+                        final base  = sym.replaceAll(
+                            RegExp(r'(USDT|BTC|ETH|BNB)$'), '');
+                        return ListTile(
+                          dense: true,
+                          onTap: () => widget.onSelect(sym),
+                          leading: Container(
+                            width: 36, height: 36,
+                            decoration: BoxDecoration(
+                              color: isCur
+                                  ? Colors.blueAccent.withOpacity(0.2)
+                                  : const Color(0xFF1A1A2E),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              base.isNotEmpty ? base[0] : sym[0],
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: isCur
+                                      ? Colors.blueAccent
+                                      : Colors.grey.shade400),
+                            ),
+                          ),
+                          title: Row(children: [
+                            Text(sym,
+                                style: TextStyle(
+                                    color: isCur
+                                        ? Colors.blueAccent
+                                        : Colors.white,
+                                    fontWeight: isCur
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                    fontSize: 13.5)),
+                            if (isWL) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 5, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: Colors.blueAccent
+                                      .withOpacity(0.12),
+                                  borderRadius:
+                                      BorderRadius.circular(4),
+                                ),
+                                child: const Text('WL',
+                                    style: TextStyle(
+                                        fontSize: 8,
+                                        color: Colors.blueAccent,
+                                        fontWeight: FontWeight.bold)),
+                              ),
+                            ],
+                          ]),
+                          trailing: isCur
+                              ? const Icon(Icons.check_rounded,
+                                  color: Colors.blueAccent, size: 18)
+                              : const Icon(
+                                  Icons.arrow_forward_ios_rounded,
+                                  color: Color(0xFF444466), size: 13),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -457,25 +855,27 @@ class _ChartPainter extends CustomPainter {
   final List<Candle> candles;
   final double       candleWidth;
   final double       scrollCandles;
-  final PivotResult? pivots;
+  final double       rightPadCandles; // empty slots right of last candle
   final int?         selectedIdx;
   final Offset?      crosshair;
+  final double?      livePrice;
 
-  _ChartPainter({
+  const _ChartPainter({
     required this.candles,
     required this.candleWidth,
     required this.scrollCandles,
-    this.pivots,
+    required this.rightPadCandles,
     this.selectedIdx,
     this.crosshair,
+    this.livePrice,
   });
 
-  static const double _priceW   = 65.0;
-  static const double _timeH    = 26.0;
-  static const Color  _bull     = Color(0xFF26A69A);
-  static const Color  _bear     = Color(0xFFEF5350);
-  static const Color  _gridLine = Color(0xFF1A1A2E);
-  static const Color  _axisCol  = Color(0xFF606080);
+  static const double _priceW = 66.0;
+  static const double _timeH  = 26.0;
+  static const Color  _bull   = Color(0xFF26A69A);
+  static const Color  _bear   = Color(0xFFEF5350);
+  static const Color  _grid   = Color(0xFF181828);
+  static const Color  _axis   = Color(0xFF555575);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -484,231 +884,230 @@ class _ChartPainter extends CustomPainter {
     final cW = size.width - _priceW;
     final cH = size.height - _timeH;
 
-    // ── Visible range ─────────────────────────────────
-    final lastVis  = (candles.length - 1 - scrollCandles)
+    // ── Right padding: shift last candle left by N slots ──
+    // This ensures the live candle is NOT flush against the axis.
+    final rightPx = rightPadCandles * candleWidth;
+
+    // ── Visible candle range ──────────────────────────────
+    // lastVis = the candle drawn at the rightmost candle slot
+    final lastVis = (candles.length - 1 - scrollCandles)
         .round()
         .clamp(0, candles.length - 1);
-    final nVis     = (cW / candleWidth).ceil() + 2;
+
+    // How many candles fit in the chart width (including right pad)
+    final nVis     = ((cW - rightPx) / candleWidth).ceil() + 2;
     final firstVis = (lastVis - nVis).clamp(0, candles.length - 1);
 
     if (firstVis > lastVis) return;
     final vis = candles.sublist(firstVis, lastVis + 1);
     if (vis.isEmpty) return;
 
-    // ── Price range ───────────────────────────────────
+    // ── Candle x position ─────────────────────────────────
+    // x(i) = right edge of chart area - right pad
+    //        - (lastVis - i) * candleWidth - halfSlot
+    double cX(int i) =>
+        cW - rightPx - (lastVis - i) * candleWidth - candleWidth / 2;
+
+    // ── Price range ───────────────────────────────────────
     var lo = vis.map((c) => c.low).reduce(math.min);
     var hi = vis.map((c) => c.high).reduce(math.max);
-    if (pivots?.hh != null) hi = math.max(hi, pivots!.hh!);
-    if (pivots?.ll != null) lo = math.min(lo, pivots!.ll!);
+    if (livePrice != null) {
+      hi = math.max(hi, livePrice!);
+      lo = math.min(lo, livePrice!);
+    }
     final range = hi - lo;
     if (range == 0) return;
-    final pad = range * 0.06;
-    lo -= pad;
-    hi += pad;
+    lo -= range * 0.07;
+    hi += range * 0.07;
 
     double p2y(double p) => cH * (1 - (p - lo) / (hi - lo));
 
-    // ── Background ────────────────────────────────────
-    canvas.drawRect(Rect.fromLTWH(0, 0, cW, cH),
+    // ── Background ────────────────────────────────────────
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height),
         Paint()..color = const Color(0xFF0A0A14));
 
-    // ── Grid lines ────────────────────────────────────
-    final gridPaint = Paint()..color = _gridLine..strokeWidth = 0.5;
-    for (int i = 0; i <= 5; i++) {
-      final y = cH * i / 5;
-      canvas.drawLine(Offset(0, y), Offset(cW, y), gridPaint);
+    // ── Horizontal grid lines ─────────────────────────────
+    final gp = Paint()..color = _grid..strokeWidth = 0.5;
+    for (int i = 0; i <= 6; i++) {
+      canvas.drawLine(
+          Offset(0, cH * i / 6), Offset(cW, cH * i / 6), gp);
     }
 
-    // Vertical separator
-    canvas.drawLine(Offset(cW, 0), Offset(cW, cH),
+    // ── Vertical grid lines ───────────────────────────────
+    if (lastVis > firstVis) {
+      final totalVis = lastVis - firstVis;
+      final vStep    = math.max(1, totalVis ~/ (cW ~/ 80).clamp(1, 12));
+      for (int i = firstVis; i <= lastVis; i += vStep) {
+        final x = cX(i);
+        if (x > 0 && x < cW) {
+          canvas.drawLine(Offset(x, 0), Offset(x, cH), gp);
+        }
+      }
+    }
+
+    // ── Price axis separator ──────────────────────────────
+    canvas.drawLine(Offset(cW, 0), Offset(cW, size.height),
         Paint()..color = const Color(0xFF1E1E35)..strokeWidth = 1);
 
-    // ── HH / LL horizontal dashed lines ───────────────
-    if (pivots?.hh != null) {
-      _dashH(canvas, p2y(pivots!.hh!), cW,
-          const Color(0xFFFFA726), 5, 4);
-    }
-    if (pivots?.ll != null) {
-      _dashH(canvas, p2y(pivots!.ll!), cW,
-          const Color(0xFFAB47BC), 5, 4);
-    }
-
-    // ── Candles (clip to chart area) ──────────────────
+    // ── Candles ───────────────────────────────────────────
     canvas.save();
     canvas.clipRect(Rect.fromLTWH(0, 0, cW, cH));
 
     for (int i = firstVis; i <= lastVis; i++) {
-      final c   = candles[i];
-      final x   = cW - (lastVis - i) * candleWidth - candleWidth / 2;
+      final c    = candles[i];
+      final x    = cX(i);
       if (x < -candleWidth * 2 || x > cW + candleWidth) continue;
 
       final isBull = c.close >= c.open;
-      final col    = isBull ? _bull : _bear;
-      final isHl   = i == selectedIdx;
+      final isLive = i == candles.length - 1;
+
+      // Live candle slightly brighter
+      final col = isLive
+          ? (isBull ? const Color(0xFF00C8B4) : const Color(0xFFFF5252))
+          : (isBull ? _bull : _bear);
+
+      final wickW = math.max(candleWidth * 0.12, 1.0);
+      final bodyW = math.max(candleWidth * 0.65, 1.0);
 
       // Wick
       canvas.drawLine(
-        Offset(x, p2y(c.high)),
-        Offset(x, p2y(c.low)),
-        Paint()
-          ..color      = col
-          ..strokeWidth = math.max(1.0, candleWidth * 0.1),
+        Offset(x, p2y(c.high)), Offset(x, p2y(c.low)),
+        Paint()..color = col..strokeWidth = wickW,
       );
 
       // Body
       final bTop  = p2y(math.max(c.open, c.close));
       final bBot  = p2y(math.min(c.open, c.close));
       final bodyH = math.max(bBot - bTop, 1.0);
-      final bodyW = math.max(candleWidth * 0.65, 1.0);
 
       canvas.drawRect(
-        Rect.fromLTWH(x - bodyW / 2, bTop, bodyW, bodyH),
-        Paint()..color = col,
-      );
+          Rect.fromLTWH(x - bodyW / 2, bTop, bodyW, bodyH),
+          Paint()..color = col);
 
-      // Highlight ring for selected candle
-      if (isHl) {
+      // Crosshair-selected highlight
+      if (i == selectedIdx) {
         canvas.drawRect(
-          Rect.fromLTWH(x - bodyW / 2 - 1, bTop - 1, bodyW + 2, bodyH + 2),
+          Rect.fromLTWH(
+              x - bodyW / 2 - 1.5, bTop - 1.5, bodyW + 3, bodyH + 3),
           Paint()
-            ..color      = Colors.white.withOpacity(0.2)
+            ..color      = Colors.white.withOpacity(0.25)
             ..style      = PaintingStyle.stroke
             ..strokeWidth = 1.2,
         );
       }
-    }
 
+      // Soft glow ring on live candle
+      if (isLive) {
+        canvas.drawRect(
+          Rect.fromLTWH(
+              x - bodyW / 2 - 1, bTop - 1, bodyW + 2, bodyH + 2),
+          Paint()
+            ..color      = col.withOpacity(0.35)
+            ..style      = PaintingStyle.stroke
+            ..strokeWidth = 0.8,
+        );
+      }
+    }
     canvas.restore();
 
-    // ── Current price dashed line ─────────────────────
-    final curY = p2y(candles.last.close);
-    if (curY >= 0 && curY <= cH) {
-      _dashH(canvas, curY, cW, Colors.white.withOpacity(0.3), 3, 5);
+    // ── Live price dashed line ────────────────────────────
+    final dispPrice = livePrice ?? candles.last.close;
+    final lpY = p2y(dispPrice);
+    if (lpY >= 0 && lpY <= cH) {
+      final isBull = candles.last.close >= candles.last.open;
+      _dashH(canvas, lpY, cW,
+          (isBull ? _bull : _bear).withOpacity(0.45),
+          dash: 3, gap: 6);
+      _drawPriceBox(
+        canvas, cW, lpY, dispPrice,
+        Colors.white,
+        isBull ? const Color(0xFF1A3A38) : const Color(0xFF3A1A1A),
+      );
     }
 
-    // ── Crosshair ─────────────────────────────────────
-    if (crosshair != null) {
+    // ── Crosshair ─────────────────────────────────────────
+    if (crosshair != null &&
+        crosshair!.dx >= 0 && crosshair!.dx <= cW) {
       final xp = Paint()
-        ..color      = Colors.white.withOpacity(0.22)
-        ..strokeWidth = 0.7;
+        ..color      = Colors.white.withOpacity(0.2)
+        ..strokeWidth = 0.8;
       canvas.drawLine(
           Offset(crosshair!.dx, 0), Offset(crosshair!.dx, cH), xp);
       if (crosshair!.dy >= 0 && crosshair!.dy <= cH) {
         canvas.drawLine(
             Offset(0, crosshair!.dy), Offset(cW, crosshair!.dy), xp);
-        // Price tag at crosshair Y
-        final chPrice = lo + (1 - crosshair!.dy / cH) * (hi - lo);
-        _drawPriceBox(canvas, cW, crosshair!.dy, chPrice,
+        final chP = lo + (1 - crosshair!.dy / cH) * (hi - lo);
+        _drawPriceBox(canvas, cW, crosshair!.dy, chP,
             Colors.white.withOpacity(0.9), const Color(0xFF222240));
       }
     }
 
-    // ── Price axis (right) ────────────────────────────
-    for (int i = 0; i <= 5; i++) {
-      final y  = cH * i / 5;
-      final pr = lo + (1 - i / 5) * (hi - lo);
-      _paintText(_fmtP(pr), _axisCol, 9.5, canvas,
-          Offset(cW + 4, y - 5));
+    // ── Price axis labels ─────────────────────────────────
+    for (int i = 0; i <= 6; i++) {
+      final y  = cH * i / 6;
+      final pr = lo + (1 - i / 6) * (hi - lo);
+      _pt(_fmtP(pr), _axis, 9.0, canvas, Offset(cW + 4, y - 5));
     }
 
-    // ── HH / LL price tag boxes ───────────────────────
-    if (pivots?.hh != null) {
-      final y = p2y(pivots!.hh!).clamp(4.0, cH - 14.0);
-      _drawTagBox(canvas, cW, y, pivots!.hh!,
-          const Color(0xFFFFA726), 'HH');
-    }
-    if (pivots?.ll != null) {
-      final y = p2y(pivots!.ll!).clamp(4.0, cH - 14.0);
-      _drawTagBox(canvas, cW, y, pivots!.ll!,
-          const Color(0xFFAB47BC), 'LL');
-    }
-
-    // ── Current price box ─────────────────────────────
-    if (curY >= 0 && curY <= cH) {
-      final isBull = candles.last.close >= candles.last.open;
-      _drawPriceBox(
-        canvas, cW, curY, candles.last.close,
-        isBull ? _bull : _bear,
-        isBull ? const Color(0xFF1A3A38) : const Color(0xFF3A1A1A),
-      );
-    }
-
-    // ── Time axis (bottom) ────────────────────────────
+    // ── Time axis labels ──────────────────────────────────
     final totalVis = lastVis - firstVis + 1;
-    final step     = math.max(1, totalVis ~/ 5);
+    final step     = math.max(1, totalVis ~/ 6);
     for (int i = firstVis; i <= lastVis; i += step) {
-      final x = cW - (lastVis - i) * candleWidth - candleWidth / 2;
-      if (x < 10 || x > cW - 10) continue;
-      final lbl = _fmtT(candles[i].time);
-      final tp  = _makeTP(lbl, _axisCol, 9.0);
-      tp.paint(canvas,
-          Offset((x - tp.width / 2).clamp(0.0, cW - tp.width), cH + 5));
+      final x = cX(i);
+      if (x < 8 || x > cW - 8) continue;
+      final tp = _mkTP(_fmtT(candles[i].time), _axis, 9.0);
+      tp.paint(canvas, Offset(
+          (x - tp.width / 2).clamp(0.0, cW - tp.width), cH + 5));
     }
   }
 
-  // ── Draw dashed horizontal line ───────────────────────
-  void _dashH(Canvas canvas, double y, double w, Color color,
-      double dash, double gap) {
-    final paint = Paint()..color = color..strokeWidth = 0.9;
-    double x    = 0;
-    bool   draw = true;
+  // ── Drawing helpers ───────────────────────────────────
+
+  void _dashH(Canvas c, double y, double w, Color col,
+      {double dash = 6, double gap = 4}) {
+    final p    = Paint()..color = col..strokeWidth = 0.9;
+    double x   = 0;
+    bool   drw = true;
     while (x < w) {
-      final end = math.min(x + (draw ? dash : gap), w);
-      if (draw) canvas.drawLine(Offset(x, y), Offset(end, y), paint);
-      x    = end;
-      draw = !draw;
+      final end = math.min(x + (drw ? dash : gap), w);
+      if (drw) c.drawLine(Offset(x, y), Offset(end, y), p);
+      x = end; drw = !drw;
     }
   }
 
-  // ── Filled price box on right axis ───────────────────
   void _drawPriceBox(Canvas canvas, double cW, double y, double price,
-      Color textColor, Color bgColor) {
-    final tp   = _makeTP(_fmtP(price), textColor, 10.0, bold: true);
+      Color textCol, Color bgCol) {
+    final tp   = _mkTP(_fmtP(price), textCol, 10.0, bold: true);
     final rect = Rect.fromLTWH(
         cW + 2, y - tp.height / 2 - 2, tp.width + 8, tp.height + 4);
-    canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(3)),
-        Paint()..color = bgColor);
-    canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(3)),
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(3)),
+        Paint()..color = bgCol);
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(3)),
         Paint()
-          ..color      = textColor.withOpacity(0.35)
+          ..color      = textCol.withOpacity(0.35)
           ..style      = PaintingStyle.stroke
           ..strokeWidth = 0.8);
     tp.paint(canvas, Offset(cW + 6, y - tp.height / 2));
   }
 
-  // ── HH/LL tag box ─────────────────────────────────────
-  void _drawTagBox(Canvas canvas, double cW, double y, double price,
-      Color color, String tag) {
-    final tp   = _makeTP('$tag ${_fmtP(price)}', color, 9.0, bold: true);
-    final rect = Rect.fromLTWH(
-        cW + 2, y - tp.height / 2 - 2, tp.width + 8, tp.height + 4);
-    canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(3)),
-        Paint()..color = color.withOpacity(0.18));
-    tp.paint(canvas, Offset(cW + 6, y - tp.height / 2));
-  }
+  void _pt(String t, Color c, double sz, Canvas canvas, Offset o) =>
+      _mkTP(t, c, sz).paint(canvas, o);
 
-  // ── Simple text helper ────────────────────────────────
-  void _paintText(String text, Color color, double fontSize,
-      Canvas canvas, Offset offset) {
-    _makeTP(text, color, fontSize).paint(canvas, offset);
-  }
-
-  TextPainter _makeTP(String text, Color color, double size,
-      {bool bold = false}) {
-    return TextPainter(
-      text: TextSpan(
-        text: text,
-        style: TextStyle(
-          fontSize:   size,
-          color:      color,
-          fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+  TextPainter _mkTP(String text, Color color, double sz,
+      {bool bold = false}) =>
+      TextPainter(
+        text: TextSpan(
+          text: text,
+          style: TextStyle(
+              fontSize:   sz,
+              color:      color,
+              fontWeight: bold ? FontWeight.bold : FontWeight.normal),
         ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-  }
+        textDirection: TextDirection.ltr,
+      )..layout();
 
-  // ── Formatters ────────────────────────────────────────
   String _fmtP(double v) {
     if (v >= 10000) return v.toStringAsFixed(0);
     if (v >= 100)   return v.toStringAsFixed(2);
@@ -720,16 +1119,17 @@ class _ChartPainter extends CustomPainter {
     final m = t.month.toString().padLeft(2, '0');
     final d = t.day.toString().padLeft(2, '0');
     if (t.hour == 0 && t.minute == 0) return '$m/$d';
-    return '${t.hour.toString().padLeft(2,'0')}:'
-           '${t.minute.toString().padLeft(2,'0')}';
+    return '${t.hour.toString().padLeft(2, '0')}:'
+        '${t.minute.toString().padLeft(2, '0')}';
   }
 
   @override
-  bool shouldRepaint(_ChartPainter old) =>
-      old.candles       != candles       ||
-      old.candleWidth   != candleWidth   ||
-      old.scrollCandles != scrollCandles ||
-      old.pivots        != pivots        ||
-      old.selectedIdx   != selectedIdx   ||
-      old.crosshair     != crosshair;
+  bool shouldRepaint(_ChartPainter o) =>
+      o.candles          != candles          ||
+      o.candleWidth      != candleWidth      ||
+      o.scrollCandles    != scrollCandles    ||
+      o.rightPadCandles  != rightPadCandles  ||
+      o.selectedIdx      != selectedIdx      ||
+      o.crosshair        != crosshair        ||
+      o.livePrice        != livePrice;
 }

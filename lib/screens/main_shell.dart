@@ -1,8 +1,7 @@
 // ─── screens/main_shell.dart ─────────────────────────────
-// Root widget with:
-//   • 4-tab BottomNavigationBar (Home, Pairs, Indicator, Bot)
-//   • Left hamburger drawer → Price Chart, Price Alerts,
-//                             Candle Pattern Alerts
+// Root widget:
+//   • 5-tab BottomNavigationBar → Home | Pairs | Indicator | Bot | Chart
+//   • Left hamburger drawer → Price Alerts · Candle Pattern Alerts
 //   • Right AppBar icon → Telegram Bots sheet
 
 import 'package:flutter/material.dart';
@@ -23,11 +22,13 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _index = 0;
 
+  // ── Tab definitions ───────────────────────────────────
   static const _tabs = [
     _TabItem(label: 'Home',      icon: Icons.home_rounded),
     _TabItem(label: 'Pairs',     icon: Icons.currency_bitcoin),
     _TabItem(label: 'Indicator', icon: Icons.tune_rounded),
     _TabItem(label: 'Bot',       icon: Icons.settings_rounded),
+    _TabItem(label: 'Chart',     icon: Icons.candlestick_chart_rounded),
   ];
 
   static const _titles = [
@@ -35,8 +36,10 @@ class _MainShellState extends State<MainShell> {
     'Trading Pairs',
     'Indicator Settings',
     'Bot Settings',
+    '',            // Chart screen owns its own AppBar
   ];
 
+  // ── Saved snack ───────────────────────────────────────
   void _onSaved() {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -47,13 +50,15 @@ class _MainShellState extends State<MainShell> {
         ]),
         backgroundColor: Colors.green.shade700,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         margin: const EdgeInsets.all(12),
         duration: const Duration(seconds: 2),
       ),
     );
   }
 
+  // ── Telegram Bots sheet ───────────────────────────────
   void _openTelegramBots() {
     showModalBottomSheet(
       context: context,
@@ -63,14 +68,7 @@ class _MainShellState extends State<MainShell> {
     );
   }
 
-  void _openChart() {
-    Navigator.pop(context); // close drawer
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const ChartScreen()),
-    );
-  }
-
+  // ── Drawer nav ────────────────────────────────────────
   void _openPriceAlerts() {
     Navigator.pop(context);
     Navigator.push(
@@ -87,50 +85,62 @@ class _MainShellState extends State<MainShell> {
     ).then((_) => setState(() {}));
   }
 
+  // ══════════════════════════════════════════════════════
+  // BUILD
+  // ══════════════════════════════════════════════════════
+
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isDark      = Theme.of(context).brightness == Brightness.dark;
+    final isChartTab  = _index == 4;
 
+    // Pages — ChartScreen kept alive via AutomaticKeepAliveClientMixin
     final pages = [
       const HomeBody(),
       TradingPairsSettingsPage(onSaved: _onSaved),
       IndicatorSettingsPage(onSaved: _onSaved),
       BotSettingsPage(onSaved: _onSaved),
+      const ChartScreen(),   // ← tab 4
     ];
 
     return Scaffold(
-      // ── Drawer (hamburger) ──────────────────────────────
-      drawer: _AppDrawer(
-        onChart:               _openChart,
-        onPriceAlerts:         _openPriceAlerts,
-        onCandlePatternAlerts: _openCandlePatternAlerts,
-      ),
+      // Chart tab owns its own AppBar → hide shell AppBar for tab 4
+      appBar: isChartTab
+          ? null
+          : AppBar(
+              title: Text(_titles[_index]),
+              centerTitle: false,
+              actions: [
+                IconButton(
+                  tooltip: 'Telegram Bots',
+                  icon: const Icon(Icons.smart_toy_rounded),
+                  onPressed: _openTelegramBots,
+                ),
+              ],
+            ),
 
-      // ── AppBar ──────────────────────────────────────────
-      appBar: AppBar(
-        title: Text(_titles[_index]),
-        centerTitle: false,
-        actions: [
-          IconButton(
-            tooltip: 'Telegram Bots',
-            icon: const Icon(Icons.smart_toy_rounded),
-            onPressed: _openTelegramBots,
-          ),
-        ],
-      ),
+      // Drawer only visible when not on chart tab
+      drawer: isChartTab
+          ? null
+          : _AppDrawer(
+              onPriceAlerts:         _openPriceAlerts,
+              onCandlePatternAlerts: _openCandlePatternAlerts,
+            ),
 
       body: IndexedStack(index: _index, children: pages),
 
-      // ── Bottom nav ──────────────────────────────────────
+      // ── Bottom nav ─────────────────────────────────────
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _index,
         onTap: (i) => setState(() => _index = i),
         type: BottomNavigationBarType.fixed,
-        selectedItemColor: Colors.blueAccent,
+        selectedItemColor:   Colors.blueAccent,
         unselectedItemColor:
             isDark ? Colors.grey.shade600 : Colors.grey.shade500,
         backgroundColor:
-            isDark ? const Color(0xFF1E1E2E) : Colors.white,
+            isChartTab
+                ? const Color(0xFF0D0D1A)   // dark bg for chart tab
+                : (isDark ? const Color(0xFF1E1E2E) : Colors.white),
         selectedFontSize:   10,
         unselectedFontSize: 10,
         elevation: 12,
@@ -152,34 +162,32 @@ class _TabItem {
 }
 
 // ══════════════════════════════════════════════════════════
-// ─── DRAWER ──────────────────────────════════════════════
+// DRAWER
 // ══════════════════════════════════════════════════════════
 class _AppDrawer extends StatelessWidget {
-  final VoidCallback onChart;
   final VoidCallback onPriceAlerts;
   final VoidCallback onCandlePatternAlerts;
 
   const _AppDrawer({
-    required this.onChart,
     required this.onPriceAlerts,
     required this.onCandlePatternAlerts,
   });
 
   @override
   Widget build(BuildContext context) {
-    final isDark         = Theme.of(context).brightness == Brightness.dark;
-    final headerBg       = isDark ? const Color(0xFF1E1E2E) : Colors.blueAccent;
-    final drawerBg       = isDark ? const Color(0xFF15152A) : Colors.white;
-    final divColor       = isDark ? Colors.grey.shade800 : Colors.grey.shade200;
-    final activeAlerts   = Config.priceAlerts.where((a) => a.shouldFire).length;
-    final triggered      = Config.priceAlerts.where((a) => a.isTriggered).length;
-    final activeCpAlerts = Config.candlePatternAlerts.where((a) => a.isActive).length;
+    final isDark       = Theme.of(context).brightness == Brightness.dark;
+    final headerBg     = isDark ? const Color(0xFF1E1E2E) : Colors.blueAccent;
+    final drawerBg     = isDark ? const Color(0xFF15152A) : Colors.white;
+    final divColor     = isDark ? Colors.grey.shade800 : Colors.grey.shade200;
+    final activeAlerts = Config.priceAlerts.where((a) => a.shouldFire).length;
+    final triggered    = Config.priceAlerts.where((a) => a.isTriggered).length;
+    final activeCp     = Config.candlePatternAlerts.where((a) => a.isActive).length;
 
     return Drawer(
       backgroundColor: drawerBg,
       child: Column(
         children: [
-          // ── Header ──────────────────────────────────────
+          // Header
           Container(
             width: double.infinity,
             padding: const EdgeInsets.fromLTRB(20, 56, 20, 24),
@@ -194,7 +202,8 @@ class _AppDrawer extends StatelessWidget {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   alignment: Alignment.center,
-                  child: const Text('📈', style: TextStyle(fontSize: 24)),
+                  child: const Text('📈',
+                      style: TextStyle(fontSize: 24)),
                 ),
                 const SizedBox(height: 12),
                 const Text('HH/LL Alert Bot',
@@ -211,26 +220,13 @@ class _AppDrawer extends StatelessWidget {
             ),
           ),
 
-          // ── Nav items ────────────────────────────────────
+          // Nav items
           Expanded(
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 8),
               children: [
 
-                // ── Price Chart ───────────────────────────
-                _DrawerItem(
-                  icon:       Icons.candlestick_chart_rounded,
-                  label:      'Price Chart',
-                  sub:        '2-month interactive chart',
-                  badge:      null,
-                  badgeColor: null,
-                  subColor:   null,
-                  onTap:      onChart,
-                ),
-
-                Divider(height: 1, indent: 16, endIndent: 16, color: divColor),
-
-                // ── Price Alerts ──────────────────────────
+                // Price Alerts
                 _DrawerItem(
                   icon:       Icons.notifications_rounded,
                   label:      'Price Alerts',
@@ -243,22 +239,22 @@ class _AppDrawer extends StatelessWidget {
                   onTap:      onPriceAlerts,
                 ),
 
-                Divider(height: 1, indent: 16, endIndent: 16, color: divColor),
+                Divider(height: 1, indent: 16, endIndent: 16,
+                    color: divColor),
 
-                // ── Candle Pattern Alerts ─────────────────
+                // Candle Pattern Alerts
                 _DrawerItem(
                   icon:       Icons.bar_chart_rounded,
                   label:      'Candle Patterns',
-                  badge:      activeCpAlerts > 0
-                      ? '$activeCpAlerts active'
-                      : null,
+                  badge:      activeCp > 0 ? '$activeCp active' : null,
                   badgeColor: Colors.teal,
                   sub:        'BE · MS · ES detection',
                   subColor:   null,
                   onTap:      onCandlePatternAlerts,
                 ),
 
-                Divider(height: 1, indent: 16, endIndent: 16, color: divColor),
+                Divider(height: 1, indent: 16, endIndent: 16,
+                    color: divColor),
 
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
@@ -272,7 +268,7 @@ class _AppDrawer extends StatelessWidget {
             ),
           ),
 
-          // ── Footer ───────────────────────────────────────
+          // Footer
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -289,12 +285,12 @@ class _AppDrawer extends StatelessWidget {
 
 // ─── Single drawer item ───────────────────────────────────
 class _DrawerItem extends StatelessWidget {
-  final IconData   icon;
-  final String     label;
-  final String?    badge;
-  final Color?     badgeColor;
-  final String?    sub;
-  final Color?     subColor;
+  final IconData     icon;
+  final String       label;
+  final String?      badge;
+  final Color?       badgeColor;
+  final String?      sub;
+  final Color?       subColor;
   final VoidCallback onTap;
 
   const _DrawerItem({
@@ -321,29 +317,28 @@ class _DrawerItem extends StatelessWidget {
         alignment: Alignment.center,
         child: Icon(icon, color: Colors.blueAccent, size: 20),
       ),
-      title: Row(
-        children: [
-          Text(label,
-              style: const TextStyle(
-                  fontWeight: FontWeight.w600, fontSize: 14.5)),
-          if (badge != null) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-              decoration: BoxDecoration(
-                color: (badgeColor ?? Colors.blueAccent).withOpacity(0.15),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(badge!,
-                  style: TextStyle(
-                      fontSize: 10,
-                      color: badgeColor ?? Colors.blueAccent,
-                      fontWeight: FontWeight.w600)),
+      title: Row(children: [
+        Text(label,
+            style: const TextStyle(
+                fontWeight: FontWeight.w600, fontSize: 14.5)),
+        if (badge != null) ...[
+          const SizedBox(width: 8),
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+              color:
+                  (badgeColor ?? Colors.blueAccent).withOpacity(0.15),
+              borderRadius: BorderRadius.circular(20),
             ),
-          ],
+            child: Text(badge!,
+                style: TextStyle(
+                    fontSize: 10,
+                    color: badgeColor ?? Colors.blueAccent,
+                    fontWeight: FontWeight.w600)),
+          ),
         ],
-      ),
+      ]),
       subtitle: sub != null
           ? Text(sub!,
               style: TextStyle(
@@ -358,7 +353,7 @@ class _DrawerItem extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════
-// ─── TELEGRAM BOTS BOTTOM SHEET ──────────────────────────
+// TELEGRAM BOTS SHEET
 // ══════════════════════════════════════════════════════════
 class _TelegramBotsSheet extends StatelessWidget {
   final VoidCallback onSaved;
